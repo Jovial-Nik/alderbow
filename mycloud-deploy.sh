@@ -173,39 +173,55 @@ do_reset(){
 }
 
 do_restore(){
-  load 2>/dev/null || true
-  local B="/opt/$SLUG"
+  local explicit_arc="${1:-}"
+  local arc=""
 
-  # Список доступных архивов
-  local arcs=()
-  while IFS= read -r f; do arcs+=("$f"); done < <(ls -t "$B/backups/"*.tar.gz 2>/dev/null || true)
-  if [ "${#arcs[@]}" -eq 0 ]; then
-    say "Нет архивов бэкапа в $B/backups/ — сначала запусти: bash $0 backup"
-    return 1
-  fi
-
-  say "Доступные бэкапы:"
-  local i=1
-  for f in "${arcs[@]}"; do
-    printf '  %d) %s (%s)\n' "$i" "$(basename "$f")" "$(du -sh "$f" 2>/dev/null | cut -f1)"
-    (( i++ )) || true
-  done
-  local ch; read -rp "  Выбери номер [1]: " ch || true
-  ch="${ch:-1}"
-  local arc="${arcs[$((ch-1))]}"
-  if [ ! -f "$arc" ]; then
-    say "Неверный выбор: $ch — введи число от 1 до ${#arcs[@]}"
-    return 1
+  if [ -n "$explicit_arc" ]; then
+    # Путь к архиву передан явно (свежий сервер)
+    [ -f "$explicit_arc" ] || { say "Файл не найден: $explicit_arc"; return 1; }
+    arc="$explicit_arc"
+  else
+    # Ищем архивы в стандартном месте
+    load 2>/dev/null || true
+    local B_tmp="/opt/${SLUG:-}"
+    local arcs=()
+    while IFS= read -r f; do arcs+=("$f"); done < <(ls -t "$B_tmp/backups/"*.tar.gz 2>/dev/null || true)
+    if [ "${#arcs[@]}" -eq 0 ]; then
+      say "Нет архивов бэкапа в $B_tmp/backups/"
+      say "Можно указать путь явно: bash $0 restore /path/to/backup.tar.gz"
+      return 1
+    fi
+    say "Доступные бэкапы:"
+    local i=1
+    for f in "${arcs[@]}"; do
+      printf '  %d) %s (%s)\n' "$i" "$(basename "$f")" "$(du -sh "$f" 2>/dev/null | cut -f1)"
+      (( i++ )) || true
+    done
+    local ch; read -rp "  Выбери номер [1]: " ch || true
+    ch="${ch:-1}"
+    arc="${arcs[$((ch-1))]}"
+    if [ ! -f "$arc" ]; then
+      say "Неверный выбор: $ch — введи число от 1 до ${#arcs[@]}"
+      return 1
+    fi
   fi
 
   say "Восстанавливаю из: $arc"
   local tmp; tmp="$(mktemp -d)"
-  tar -xzf "$arc" -C "$tmp" || die "Не удалось распаковать архив"
+  tar -xzf "$arc" -C "$tmp" || { say "Не удалось распаковать архив"; rm -rf "$tmp"; return 1; }
+
+  # Читаем SLUG из бэкапа если ещё не известен (свежий сервер без deploy.conf)
+  if [ -z "${SLUG:-}" ] && [ -f "$tmp/deploy.conf" ]; then
+    SLUG="$(grep '^SLUG=' "$tmp/deploy.conf" | cut -d= -f2- | tr -d "'\"")" || true
+    say "  SLUG из архива: $SLUG"
+  fi
+  local B="/opt/$SLUG"
 
   # deploy.conf
   if [ -f "$tmp/deploy.conf" ]; then
     cp "$tmp/deploy.conf" "$CONF"
     say "  deploy.conf → $CONF"
+    set -a; . "$CONF"; set +a
   fi
 
   # .env компонентов
@@ -233,12 +249,15 @@ do_restore(){
           && say "  БД восстановлена" \
           || say "  ! ошибка восстановления БД — проверь pg.sql вручную"
       else
-        say "  БД пропущена (pg.sql остался в $tmp/pg.sql)"
+        mkdir -p "$B/backups"
         cp "$tmp/pg.sql" "$B/backups/restore-$(date +%Y%m%d%H%M%S).pg.sql" 2>/dev/null || true
+        say "  БД пропущена — pg.sql сохранён в $B/backups/"
       fi
     else
-      say "  ! remnawave-db не запущен — БД не восстановлена, pg.sql сохранён в $B/backups/"
+      mkdir -p "$B/backups"
       cp "$tmp/pg.sql" "$B/backups/restore-$(date +%Y%m%d%H%M%S).pg.sql" 2>/dev/null || true
+      say "  ! remnawave-db не запущен — pg.sql сохранён в $B/backups/"
+      say "    после деплоя нажми b) ещё раз или запусти: bash $0 restore $arc"
     fi
   fi
 
@@ -258,8 +277,8 @@ do_restore(){
   fi
 
   rm -rf "$tmp"
-  say "Готово. Перезапусти контейнеры чтобы изменения вступили в силу:"
-  say "  bash $0 --from deploy-moonlight.sh run"
+  say "Готово."
+  say "  Следующий шаг — деплой: bash $0 run"
 }
 
 do_backup(){
@@ -6050,7 +6069,7 @@ case "${1:-menu}" in
   probe)   if [ "$#" -gt 1 ]; then do_probe "${@:2}"; else load; do_probe "$MAIN_DOMAIN" "$RELAY_DOMAIN"; fi ;;
   update)  do_update ;;
   backup)  do_backup ;;
-  restore) do_restore || true ;;
+  restore) do_restore "${2:-}" || true ;;
   info)    do_info ;;
   reset)   do_reset ;;
   rotate)  do_rotate ;;
