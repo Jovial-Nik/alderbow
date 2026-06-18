@@ -68,7 +68,8 @@ do_update(){
 
 do_info(){
   load 2>/dev/null || { die "Нет конфига — деплой ещё не делался"; }
-  local B="/opt/$SLUG" CRED="$B/credentials.txt" SUMMARY="$B/summary.txt"
+  local B="/opt/$SLUG"
+  local CRED="$B/credentials.txt" SUMMARY="$B/summary.txt"
   local sub_uuid="${TEST_SUB_UUID:-}" admin_pass wdtt_pass api_pass
   admin_pass="$(grep -E '^\s*pass:' "$CRED" 2>/dev/null | awk '{print $2}' | head -1)"
   wdtt_pass="$(grep -E '^\s*wdtt-password:' "$CRED" 2>/dev/null | awk '{print $2}' | head -1)"
