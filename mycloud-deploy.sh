@@ -156,16 +156,16 @@ do_reset(){
   [ "$a" = "YES" ] || { say "Отменено."; return 0; }
   [ -f "$CONF" ] && cp -f "$CONF" "${CONF}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
   for s in panel sub caddy node decoy; do
-    [ -f "/opt/$SLUG/$s/docker-compose.yml" ] && ( cd "/opt/$SLUG/$s" && docker compose down -v >/dev/null 2>&1 )
+    [ -f "/opt/$SLUG/$s/docker-compose.yml" ] && ( cd "/opt/$SLUG/$s" && docker compose down -v >/dev/null 2>&1 ) || true
   done
-  docker rm -f remnawave remnawave-db remnawave-redis remnawave-subscription-page remnanode >/dev/null 2>&1
+  docker rm -f remnawave remnawave-db remnawave-redis remnawave-subscription-page remnanode >/dev/null 2>&1 || true
   # любые остатки *-caddy/-decoy (в т.ч. от других slug — host-network, дерутся за порты)
   local c; for c in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E -- '-(caddy|decoy|decoy-php)$'); do
-    docker rm -f "$c" >/dev/null 2>&1 && say "убрал контейнер: $c"
+    docker rm -f "$c" >/dev/null 2>&1 && say "убрал контейнер: $c" || true
   done
-  docker network rm remnawave-network >/dev/null 2>&1
-  rm -rf "/opt/$SLUG"; rm -f "$CONF"
-  say "Готово. Контейнеры сейчас:"; docker ps --format '  {{.Names}}' 2>/dev/null
+  docker network rm remnawave-network >/dev/null 2>&1 || true
+  rm -rf "/opt/$SLUG" || true; rm -f "$CONF" || true
+  say "Готово. Контейнеры сейчас:"; docker ps --format '  {{.Names}}' 2>/dev/null || true
   say "Дальше чистый деплой: запусти $0 → визард → пункт 1."
 }
 
