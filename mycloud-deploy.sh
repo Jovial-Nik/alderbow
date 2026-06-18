@@ -237,34 +237,37 @@ do_preflight(){
 do_stages(){
   load 2>/dev/null || true
   local what="${ROLE:-exit}"
+  local W=26  # ширина колонки с именем фазы
+  _s(){ printf "  %-${W}s %s\n" "$1" "$2"; }
   echo "Фазы для роли '$(c '1;32' "$what")' (--from <фаза> пропускает до указанной):"
   case "$what" in
     exit|moonlight)
-      echo "  wdtt-build.sh"
-      echo "  deploy-moonlight.sh"
-      echo "  provision.sh"
-      echo "  deploy-node.sh exit"
-      echo "  sync-hy2-cert.sh exit"
-      echo "  handoff-moonlight.sh"
-      echo "  kick-node.sh exit"
-      echo "  stealth.sh decoy"
-      echo "  stealth.sh caddy"
-      echo "  deploy-decoy-pro.sh"
-      echo "  deploy-decoy-pages.sh"
-      echo "  setup-connect-min.sh"
-      echo "  health-check.sh"
-      [ "${USE_TAILSCALE:-no}" = yes ] && echo "  setup-tailscale.sh" ;;
+      _s "wdtt-build.sh"        "Мобильный TURN-канал (аварийный VPN), UDP 56000/56001"
+      _s "deploy-moonlight.sh"  "Docker-стек панели: Remnawave + БД + Redis + страница подписки"
+      _s "provision.sh"         "Headless-настройка панели: admin, профиль, нода, тест-юзер, хосты"
+      _s "deploy-node.sh exit"  "Xray-нода на выходном сервере (VLESS+Reality, Hysteria2)"
+      _s "sync-hy2-cert.sh exit" "Копирует Hy2-сертификат из Caddy в контейнер ноды"
+      _s "handoff-moonlight.sh" "Перехват порта 443: останавливает временный Caddy, поднимает основной"
+      _s "kick-node.sh exit"    "Через API панели даёт ноде сигнал перечитать конфиг"
+      _s "stealth.sh decoy"     "Деплоит страницу-заглушку (имитация облачного хранилища)"
+      _s "stealth.sh caddy"     "Настраивает Caddy: / → декой, /api/sub/* → Remnawave, /c/* → connect"
+      _s "deploy-decoy-pro.sh"  "Расширенные страницы декоя (pricing, docs, signup…)"
+      _s "deploy-decoy-pages.sh" "Статические ассеты декоя (CSS, JS, шрифты)"
+      _s "setup-connect-min.sh" "Минимальный connect-serve: страница /c/<uuid>/ для клиентов"
+      _s "health-check.sh"      "Проверяет доступность панели, подписки, Hy2-сертификата"
+      [ "${USE_TAILSCALE:-no}" = yes ] && \
+      _s "setup-tailscale.sh"   "Подключает Tailscale, открывает панель на :8444 только внутри сети" ;;
     relay|sunshine)
-      echo "  provision-relay.sh"
-      echo "  setup-relay-ssh.sh"
-      echo "  kick-node.sh relay"
-      echo "  health-check.sh" ;;
+      _s "provision-relay.sh"   "Готовит relay-сервер: ключи, bootstrap.env для sunshine-node"
+      _s "setup-relay-ssh.sh"   "SSH на relay → запускает sunshine-node деплой удалённо"
+      _s "kick-node.sh relay"   "Через API панели регистрирует relay-ноду"
+      _s "health-check.sh"      "Проверяет доступность relay и Hy2-сертификата" ;;
     sunshine-node)
-      echo "  deploy-sunshine.sh"
-      echo "  sync-hy2-cert.sh relay"
-      echo "  deploy-node.sh relay"
-      echo "  deploy-decoy-sunshine.sh"
-      echo "  health-check.sh" ;;
+      _s "deploy-sunshine.sh"   "Docker-стек relay: xray-нода + Caddy на relay-сервере"
+      _s "sync-hy2-cert.sh relay" "Копирует Hy2-сертификат relay из Caddy в контейнер ноды"
+      _s "deploy-node.sh relay" "Регистрирует relay-ноду в панели через bootstrap.env"
+      _s "deploy-decoy-sunshine.sh" "Страница-заглушка на relay (тот же бренд)"
+      _s "health-check.sh"      "Проверяет relay" ;;
   esac
   echo ""
   echo "Пример: bash $0 --from provision.sh run"
