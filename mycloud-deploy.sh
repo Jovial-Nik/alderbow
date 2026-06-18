@@ -180,7 +180,8 @@ do_restore(){
   local arcs=()
   while IFS= read -r f; do arcs+=("$f"); done < <(ls -t "$B/backups/"*.tar.gz 2>/dev/null || true)
   if [ "${#arcs[@]}" -eq 0 ]; then
-    die "Нет архивов бэкапа в $B/backups/ — сначала запусти backup"
+    say "Нет архивов бэкапа в $B/backups/ — сначала запусти: bash $0 backup"
+    return 1
   fi
 
   say "Доступные бэкапы:"
@@ -192,7 +193,10 @@ do_restore(){
   local ch; read -rp "  Выбери номер [1]: " ch || true
   ch="${ch:-1}"
   local arc="${arcs[$((ch-1))]}"
-  [ -f "$arc" ] || die "Неверный выбор"
+  if [ ! -f "$arc" ]; then
+    say "Неверный выбор: $ch — введи число от 1 до ${#arcs[@]}"
+    return 1
+  fi
 
   say "Восстанавливаю из: $arc"
   local tmp; tmp="$(mktemp -d)"
@@ -6017,7 +6021,7 @@ case "${1:-menu}" in
   probe)   if [ "$#" -gt 1 ]; then do_probe "${@:2}"; else load; do_probe "$MAIN_DOMAIN" "$RELAY_DOMAIN"; fi ;;
   update)  do_update ;;
   backup)  do_backup ;;
-  restore) do_restore ;;
+  restore) do_restore || true ;;
   info)    do_info ;;
   reset)   do_reset ;;
   rotate)  do_rotate ;;
@@ -6049,7 +6053,7 @@ case "${1:-menu}" in
       5) load; do_probe "$MAIN_DOMAIN" "$RELAY_DOMAIN" ;;
       6) do_update ;;
       7) do_backup ;;
-      b|B) do_restore ;;
+      b|B) do_restore || true ;;
       8) do_rotate ;;
       9) do_stages ;;
       r|R) do_reset ;;
