@@ -172,6 +172,77 @@ do_reset(){
   say "Дальше чистый деплой: запусти $0 → визард → пункт 1."
 }
 
+do_restore(){
+  load 2>/dev/null || true
+  local B="/opt/$SLUG"
+
+  # Список доступных архивов
+  local arcs=()
+  while IFS= read -r f; do arcs+=("$f"); done < <(ls -t "$B/backups/"*.tar.gz 2>/dev/null || true)
+  if [ "${#arcs[@]}" -eq 0 ]; then
+    die "Нет архивов бэкапа в $B/backups/ — сначала запусти backup"
+  fi
+
+  say "Доступные бэкапы:"
+  local i=1
+  for f in "${arcs[@]}"; do
+    printf '  %d) %s (%s)\n' "$i" "$(basename "$f")" "$(du -sh "$f" 2>/dev/null | cut -f1)"
+    (( i++ )) || true
+  done
+  local ch; read -rp "  Выбери номер [1]: " ch || true
+  ch="${ch:-1}"
+  local arc="${arcs[$((ch-1))]}"
+  [ -f "$arc" ] || die "Неверный выбор"
+
+  say "Восстанавливаю из: $arc"
+  local tmp; tmp="$(mktemp -d)"
+  tar -xzf "$arc" -C "$tmp" || die "Не удалось распаковать архив"
+
+  # deploy.conf
+  if [ -f "$tmp/deploy.conf" ]; then
+    cp "$tmp/deploy.conf" "$CONF"
+    say "  deploy.conf → $CONF"
+  fi
+
+  # .env компонентов
+  for comp in panel sub caddy node decoy; do
+    if [ -f "$tmp/$comp.env" ]; then
+      mkdir -p "$B/$comp"
+      cp "$tmp/$comp.env" "$B/$comp/.env"
+      say "  $comp.env → $B/$comp/.env"
+    fi
+  done
+
+  # credentials.txt
+  if [ -f "$tmp/credentials.txt" ]; then
+    cp "$tmp/credentials.txt" "$B/credentials.txt"
+    chmod 600 "$B/credentials.txt"
+    say "  credentials.txt"
+  fi
+
+  # PostgreSQL
+  if [ -f "$tmp/pg.sql" ]; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^remnawave-db$'; then
+      local ok; read -rp "  Восстановить БД из pg.sql? Текущие данные будут перезаписаны (yes/no) [no]: " ok || true
+      if [ "${ok:-no}" = yes ]; then
+        docker exec -i remnawave-db psql -U "${POSTGRES_USER:-postgres}" < "$tmp/pg.sql" >/dev/null 2>&1 \
+          && say "  БД восстановлена" \
+          || say "  ! ошибка восстановления БД — проверь pg.sql вручную"
+      else
+        say "  БД пропущена (pg.sql остался в $tmp/pg.sql)"
+        cp "$tmp/pg.sql" "$B/backups/restore-$(date +%Y%m%d%H%M%S).pg.sql" 2>/dev/null || true
+      fi
+    else
+      say "  ! remnawave-db не запущен — БД не восстановлена, pg.sql сохранён в $B/backups/"
+      cp "$tmp/pg.sql" "$B/backups/restore-$(date +%Y%m%d%H%M%S).pg.sql" 2>/dev/null || true
+    fi
+  fi
+
+  rm -rf "$tmp"
+  say "Готово. Перезапусти контейнеры чтобы изменения вступили в силу:"
+  say "  bash $0 --from deploy-moonlight.sh run"
+}
+
 do_backup(){
   load
   local B="/opt/$SLUG"
@@ -5946,6 +6017,7 @@ case "${1:-menu}" in
   probe)   if [ "$#" -gt 1 ]; then do_probe "${@:2}"; else load; do_probe "$MAIN_DOMAIN" "$RELAY_DOMAIN"; fi ;;
   update)  do_update ;;
   backup)  do_backup ;;
+  restore) do_restore ;;
   info)    do_info ;;
   reset)   do_reset ;;
   rotate)  do_rotate ;;
@@ -5965,6 +6037,7 @@ case "${1:-menu}" in
     echo "  5) Проверить серверы снаружи (probe)"
     echo "  6) Обновить компоненты (update)"
     echo "  7) Бэкап конфигов и БД (backup)"
+    echo "  b) Восстановить из бэкапа (restore)"
     echo "  8) Сменить пароли (rotate)"
     echo "  9) Список фаз деплоя (stages)"
     echo "  r) Полный сброс — снести стек начисто (reset)"
@@ -5976,6 +6049,7 @@ case "${1:-menu}" in
       5) load; do_probe "$MAIN_DOMAIN" "$RELAY_DOMAIN" ;;
       6) do_update ;;
       7) do_backup ;;
+      b|B) do_restore ;;
       8) do_rotate ;;
       9) do_stages ;;
       r|R) do_reset ;;
