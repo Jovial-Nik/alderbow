@@ -71,8 +71,8 @@ do_info(){
   local B="/opt/$SLUG"
   local CRED="$B/credentials.txt" SUMMARY="$B/summary.txt"
   local sub_uuid="${TEST_SUB_UUID:-}" admin_pass wdtt_pass api_pass
-  admin_pass="$(grep -E '^\s*pass:' "$CRED" 2>/dev/null | awk '{print $2}' | head -1)"
-  wdtt_pass="$(grep -E '^\s*wdtt-password:' "$CRED" 2>/dev/null | awk '{print $2}' | head -1)"
+  admin_pass="$(grep -E '^\s*pass:' "$CRED" 2>/dev/null | awk '{print $2}' | head -1 || true)"
+  wdtt_pass="$(grep -E '^\s*wdtt-password:' "$CRED" 2>/dev/null | awk '{print $2}' | head -1 || true)"
   # tailscale-адрес панели, если есть
   local ts_url=""
   if command -v tailscale >/dev/null 2>&1; then
@@ -105,16 +105,17 @@ do_info(){
     if [ -n "$_token" ] && [ -n "$MAIN_DOMAIN" ]; then
       _users="$(curl -sf --max-time 4 -H "Authorization: Bearer $_token" \
         http://127.0.0.1:3000/api/users 2>/dev/null \
-        | python3 -c "
-import sys,json
+        | MAIN_DOMAIN="$MAIN_DOMAIN" python3 -c '
+import sys,json,os
 d=json.load(sys.stdin)
-us=d.get('response',{}).get('users',d.get('users',[]))
+us=d.get("response",{}).get("users",d.get("users",[]))
+md=os.environ.get("MAIN_DOMAIN","")
 for u in us:
-    uid=u.get('shortUuid',''); name=u.get('username',u.get('name','?'))
-    exp=u.get('expireAt','') or ''
-    exp=exp[:10] if exp else '∞'
-    if uid: print(f'  {name} (до {exp}):  https://${MAIN_DOMAIN}/api/sub/{uid}')
-" 2>/dev/null || true)"
+    uid=u.get("shortUuid",""); name=u.get("username",u.get("name","?"))
+    exp=u.get("expireAt","") or ""
+    exp=exp[:10] if exp else "∞"
+    if uid: print(f"  {name} (до {exp}):  https://{md}/api/sub/{uid}")
+' 2>/dev/null || true)"
       if [ -n "$_users" ]; then
         echo "── Пользователи (активные подписки) ──"
         echo "$_users"
@@ -160,7 +161,7 @@ do_reset(){
   done
   docker rm -f remnawave remnawave-db remnawave-redis remnawave-subscription-page remnanode >/dev/null 2>&1 || true
   # любые остатки *-caddy/-decoy (в т.ч. от других slug — host-network, дерутся за порты)
-  local c; for c in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E -- '-(caddy|decoy|decoy-php)$'); do
+  local c; for c in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E -- '-(caddy|decoy|decoy-php)$' || true); do
     docker rm -f "$c" >/dev/null 2>&1 && say "убрал контейнер: $c" || true
   done
   docker network rm remnawave-network >/dev/null 2>&1 || true
@@ -226,7 +227,7 @@ do_preflight(){
   # Проверка портов 80/443
   for _p in 80 443; do
     if ss -tlnp 2>/dev/null | grep -q ":$_p "; then
-      say "ПРЕДУПРЕЖДЕНИЕ: порт $_p уже занят ($(ss -tlnp | grep ":$_p " | awk '{print $NF}' | head -1))"
+      say "ПРЕДУПРЕЖДЕНИЕ: порт $_p уже занят ($(ss -tlnp 2>/dev/null | grep ":$_p " | awk '{print $NF}' | head -1 || true))"
     fi
   done
 }
@@ -273,7 +274,7 @@ do_rotate(){
   say "Ротация паролей (панель Remnawave + WDTT)"
 
   # Читаем текущий пароль для API
-  local cur_pass; cur_pass="$(grep -E '^\s*pass:' "$CRED" 2>/dev/null | awk '{print $2}' | head -1)"
+  local cur_pass; cur_pass="$(grep -E '^\s*pass:' "$CRED" 2>/dev/null | awk '{print $2}' | head -1 || true)"
   [ -z "$cur_pass" ] && die "Не могу прочитать текущий пароль из $CRED"
 
   local new_admin new_wdtt
@@ -435,7 +436,7 @@ phase(){ local script="$1"; shift || true
   local f="$WORK/$script"; render "$script" "$f"
   bash -n "$f" || die "синтаксическая ошибка в $script после рендера"
   if [ -n "${LOG_FILE:-}" ]; then
-    bash "$f" "$@" 2>&1 | tee -a "$LOG_FILE"; [ "${PIPESTATUS[0]}" = 0 ] || die "ошибка в $script"
+    bash "$f" "$@" 2>&1 | tee -a "$LOG_FILE" || die "ошибка в $script"
   else
     bash "$f" "$@"
   fi
@@ -457,7 +458,7 @@ run(){
   [ -f "$CONF" ] && [ "$CONF" != "$WORK/deploy.conf" ] && cp -f "$CONF" "$WORK/deploy.conf" 2>/dev/null || true
   do_preflight
   # префлайт: убрать конфликтующие контейнеры ДРУГИХ slug (host-network Caddy/декой дерутся за порты)
-  local __c; for __c in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E -- '-(caddy|decoy|decoy-php)$' | grep -vE "^${SLUG}-"); do
+  local __c; for __c in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E -- '-(caddy|decoy|decoy-php)$' | grep -vE "^${SLUG}-" || true); do
     docker rm -f "$__c" >/dev/null 2>&1 && say "префлайт: убрал конфликтующий контейнер чужого slug — $__c"
   done
   local STARTED=true
