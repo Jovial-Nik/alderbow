@@ -533,8 +533,7 @@ wizard(){
   [ -f "$CONF" ] && cp -f "$CONF" "${CONF}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
   : > "$CONF"; for v in "${VARS[@]}"; do printf '%s=%q\n' "$v" "${!v:-}" >> "$CONF"; done
   say "Сохранил $CONF"
-  local _show; ask _show "Показать данные для подключения? (yes/no)" "yes"
-  [ "${_show:-yes}" = yes ] && do_info
+  do_info
 }
 
 load(){ [ -f "$CONF" ] || die "Нет $CONF — запусти: sudo bash $0 wizard"; set -a; . "$CONF"; set +a; }
