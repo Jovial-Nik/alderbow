@@ -168,6 +168,48 @@ do_reset(){
   say "Дальше чистый деплой: запусти $0 → визард → пункт 1."
 }
 
+do_backup(){
+  load
+  local B="/opt/$SLUG"
+  local ts; ts="$(date +%Y%m%d-%H%M%S)"
+  local bdir="$B/backups/$ts"
+  mkdir -p "$bdir"
+
+  say "Бэкап $SLUG → $bdir"
+
+  # конфиг визарда
+  [ -f "$CONF" ] && cp "$CONF" "$bdir/deploy.conf" && say "  deploy.conf"
+
+  # .env файлы компонентов
+  for comp in panel sub caddy node decoy; do
+    local ef="$B/$comp/.env"
+    [ -f "$ef" ] && cp "$ef" "$bdir/$comp.env" && say "  $comp/.env"
+  done
+
+  # credentials и summary
+  for f in credentials.txt summary.txt; do
+    [ -f "$B/$f" ] && cp "$B/$f" "$bdir/$f" && say "  $f"
+  done
+
+  # дамп PostgreSQL
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^remnawave-db$'; then
+    docker exec remnawave-db sh -c 'pg_dumpall -U "${POSTGRES_USER:-postgres}"' \
+      > "$bdir/pg.sql" 2>/dev/null \
+      && say "  БД: pg.sql ($(du -sh "$bdir/pg.sql" 2>/dev/null | cut -f1))" \
+      || say "  ! дамп БД не снят — контейнер remnawave-db не ответил"
+  else
+    say "  (remnawave-db не запущен — дамп БД пропущен)"
+  fi
+
+  # архив всего бэкапа
+  local arc="$B/backups/${SLUG}-${ts}.tar.gz"
+  tar -czf "$arc" -C "$bdir" . 2>/dev/null \
+    && say "Архив: $arc ($(du -sh "$arc" 2>/dev/null | cut -f1))" \
+    || say "! не удалось создать архив — файлы остались в $bdir"
+
+  say "Готово. Все бэкапы: $B/backups/"
+}
+
 do_preflight(){
   # Обязательные поля по роли
   local ok=true
@@ -5876,6 +5918,7 @@ case "${1:-menu}" in
   extract) ensure_templates; d="${2:?укажи каталог}"; mkdir -p "$d"; cp "$TPL_DIR"/* "$d"/; say "Шаблоны распакованы в $d" ;;
   probe)   if [ "$#" -gt 1 ]; then do_probe "${@:2}"; else load; do_probe "$MAIN_DOMAIN" "$RELAY_DOMAIN"; fi ;;
   update)  do_update ;;
+  backup)  do_backup ;;
   info)    do_info ;;
   reset)   do_reset ;;
   rotate)  do_rotate ;;
@@ -5894,9 +5937,10 @@ case "${1:-menu}" in
     echo "  4) Показать конфиг"
     echo "  5) Проверить серверы снаружи (probe)"
     echo "  6) Обновить компоненты (update)"
-    echo "  7) Сменить пароли (rotate)"
-    echo "  8) Список фаз деплоя (stages)"
-    echo "  9) Полный сброс — снести стек начисто (reset)"
+    echo "  7) Бэкап конфигов и БД (backup)"
+    echo "  8) Сменить пароли (rotate)"
+    echo "  9) Список фаз деплоя (stages)"
+    echo "  r) Полный сброс — снести стек начисто (reset)"
     echo "  0) Выход"
     read -rp "  Выбор [1]: " ch || true
     case "${ch:-1}" in
@@ -5904,9 +5948,10 @@ case "${1:-menu}" in
       4) for v in "${VARS[@]}"; do printf '%s=%s\n' "$v" "${!v}"; done ;;
       5) load; do_probe "$MAIN_DOMAIN" "$RELAY_DOMAIN" ;;
       6) do_update ;;
-      7) do_rotate ;;
-      8) do_stages ;;
-      9) do_reset ;;
+      7) do_backup ;;
+      8) do_rotate ;;
+      9) do_stages ;;
+      r|R) do_reset ;;
       *) exit 0 ;;
     esac ;;
   *) die "неизвестная команда: $1" ;;
