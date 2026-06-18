@@ -205,6 +205,8 @@ wizard(){
 
   : > "$CONF"; for v in "${VARS[@]}"; do printf '%s=%q\n' "$v" "${!v}" >> "$CONF"; done
   say "Сохранил $CONF"
+  local _show; ask _show "Показать данные для подключения? (yes/no)" "yes"
+  [ "${_show:-yes}" = yes ] && do_info
 }
 
 load(){ [ -f "$CONF" ] || die "Нет $CONF — запусти: sudo bash $0 wizard"; set -a; . "$CONF"; set +a; }
@@ -5717,21 +5719,20 @@ case "${1:-menu}" in
     load
     echo; say "Роль: $(c '1;32' "$ROLE") · бренд: $BRAND · домен: $MAIN_DOMAIN"
     echo "  1) Запустить развёртывание по роли ($ROLE)"
-    echo "  2) Перенастроить (wizard)"
-    echo "  3) Показать конфиг"
-    echo "  4) Проверить серверы снаружи (probe)"
-    echo "  5) Обновить компоненты (update)"
-    echo "  6) Полный сброс — снести стек начисто (reset)"
-    echo "  7) Показать сводку (info)"
+    echo "  2) Данные для подключения — панель, WDTT, подписка"
+    echo "  3) Перенастроить (wizard)"
+    echo "  4) Показать конфиг"
+    echo "  5) Проверить серверы снаружи (probe)"
+    echo "  6) Обновить компоненты (update)"
+    echo "  7) Полный сброс — снести стек начисто (reset)"
     echo "  8) Выход"
     read -rp "  Выбор [1]: " ch || true
     case "${ch:-1}" in
-      1) run "$ROLE" ;; 2) wizard ;;
-      3) for v in "${VARS[@]}"; do printf '%s=%s\n' "$v" "${!v}"; done ;;
-      4) load; do_probe "$MAIN_DOMAIN" "$RELAY_DOMAIN" ;;
-      5) do_update ;;
-      6) do_reset ;;
-      7) do_info ;;
+      1) run "$ROLE" ;; 2) do_info ;; 3) wizard ;;
+      4) for v in "${VARS[@]}"; do printf '%s=%s\n' "$v" "${!v}"; done ;;
+      5) load; do_probe "$MAIN_DOMAIN" "$RELAY_DOMAIN" ;;
+      6) do_update ;;
+      7) do_reset ;;
       *) exit 0 ;;
     esac ;;
   *) die "неизвестная команда: $1" ;;
