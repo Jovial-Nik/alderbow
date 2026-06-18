@@ -498,6 +498,7 @@ wizard(){
     _ask_yn ACME_STAGING  "Staging-сертификат LE (тест без лимитов, браузер ругается)" "${ACME_STAGING:-no}"
     ask WDTT_PASS     "Пароль WDTT (пусто = сгенерируется при деплое)"               "${WDTT_PASS:-}"
     ask ADMIN_PASS    "Пароль admin-панели (пусто = сгенерируется при деплое)"         "${ADMIN_PASS:-}"
+    TEST_SUB_UUID="${TEST_SUB_UUID:-}"
 
     say ""
     say "── Релей (оставьте IP пустым, если не планируете) ──────"
@@ -518,19 +519,19 @@ wizard(){
     ask RELAY_NAME   "Имя этого релея (метка)"                     "${RELAY_NAME:-Sunshine}"
     ask ACME_EMAIL   "E-mail для Let's Encrypt"                    "${ACME_EMAIL:-admin@${RELAY_DOMAIN:-example.com}}"
     MAIN_DOMAIN="${MAIN_DOMAIN:-}"; RELAY_IP="${RELAY_IP:-}"
-    USE_TAILSCALE="${USE_TAILSCALE:-no}"; GEO_BLOCK="${GEO_BLOCK:-no}"; PQ="${PQ:-no}"
+    USE_TAILSCALE="${USE_TAILSCALE:-no}"; GEO_BLOCK="${GEO_BLOCK:-no}"; PQ="${PQ:-no}"; ACME_STAGING="${ACME_STAGING:-no}"
     TEST_SUB_UUID="${TEST_SUB_UUID:-}"; WDTT_PASS="${WDTT_PASS:-}"; ADMIN_PASS="${ADMIN_PASS:-}"; AUTO_RELAY="no"
   fi
 
   say ""
   say "── Проверьте настройки ─────────────────────────────────"
-  for v in "${VARS[@]}"; do printf '  %-20s = %s\n' "$v" "${!v}"; done
+  for v in "${VARS[@]}"; do printf '  %-20s = %s\n' "$v" "${!v:-}"; done
   say ""
   local _ok; ask _ok "Сохранить? (yes — сохранить, no — начать заново)" "yes"
   if [ "${_ok:-yes}" != yes ]; then say "Перезапуск визарда..."; wizard; return; fi
 
   [ -f "$CONF" ] && cp -f "$CONF" "${CONF}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-  : > "$CONF"; for v in "${VARS[@]}"; do printf '%s=%q\n' "$v" "${!v}" >> "$CONF"; done
+  : > "$CONF"; for v in "${VARS[@]}"; do printf '%s=%q\n' "$v" "${!v:-}" >> "$CONF"; done
   say "Сохранил $CONF"
   local _show; ask _show "Показать данные для подключения? (yes/no)" "yes"
   [ "${_show:-yes}" = yes ] && do_info
@@ -6097,7 +6098,7 @@ case "${1:-menu}" in
     read -rp "  Выбор [1]: " ch || true
     case "${ch:-1}" in
       1) run "$ROLE" ;; 2) do_info ;; 3) wizard ;;
-      4) for v in "${VARS[@]}"; do printf '%s=%s\n' "$v" "${!v}"; done ;;
+      4) for v in "${VARS[@]}"; do printf '%s=%s\n' "$v" "${!v:-}"; done ;;
       5) load; do_probe "$MAIN_DOMAIN" "$RELAY_DOMAIN" ;;
       6) do_update ;;
       7) do_backup ;;
