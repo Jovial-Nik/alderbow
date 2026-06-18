@@ -140,29 +140,69 @@ ask(){ local var="$1" prompt="$2" def="${3:-}" cur ans; cur="${!var:-$def}"; if 
 wizard(){
   say "Мастер настройки (Enter — оставить значение в скобках)"
   set -a; [ -f "$CONF" ] && . "$CONF" || true; set +a
-  ask ROLE         "Роль сервера: exit (выход/панель) или relay (релей)" "${ROLE:-exit}"
-  ask BRAND        "Бренд (страница/декой)"                               "${BRAND:-MyCloud}"
+
+  _ask_yn(){
+    local _var="$1" _prompt="$2" _dflt="$3" _v
+    while true; do
+      ask "$_var" "$_prompt" "$_dflt"
+      _v="${!_var}"; _v="${_v,,}"
+      if [ "$_v" = yes ] || [ "$_v" = no ]; then printf -v "$_var" '%s' "$_v"; break; fi
+      say "  → Введите yes или no"
+    done
+  }
+
+  say ""
+  say "── Основное ────────────────────────────────────────────"
+  ask ROLE     "Роль сервера: exit (выход/панель) или relay (релей)" "${ROLE:-exit}"
+  ask BRAND    "Бренд (страница-декой)"                              "${BRAND:-MyCloud}"
   local dflt_slug; dflt_slug="$(printf '%s' "${SLUG:-$BRAND}" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9-')"
-  ask SLUG         "Slug для путей/контейнеров (a-z0-9-)"                 "$dflt_slug"
-  ask MAIN_DOMAIN  "Домен выходного сервера (панель/подписка)"            "${MAIN_DOMAIN:-}"
-  ask RELAY_DOMAIN "Домен релея"                                         "${RELAY_DOMAIN:-}"
-  ask EXIT_IP      "Публичный IP выходного сервера"                      "${EXIT_IP:-}"
-  ask RELAY_IP     "Публичный IP релея"                                  "${RELAY_IP:-}"
-  ask EXIT_NAME    "Имя выходного узла (метка)"                          "${EXIT_NAME:-Moonlight}"
-  ask RELAY_NAME   "Имя релея (метка)"                                   "${RELAY_NAME:-Sunshine}"
-  ask ACME_EMAIL   "E-mail для Let's Encrypt"                            "${ACME_EMAIL:-admin@${MAIN_DOMAIN:-example.com}}"
-  ask USE_TAILSCALE "Скрывать панель через Tailscale? (yes/no)"          "${USE_TAILSCALE:-yes}"
-  ask SSH_PORT     "SSH-порт (для UFW, чтобы не отрезать доступ)"          "${SSH_PORT:-22}"
-  ask HARDEN       "Hardening SSH+firewall? no — если на сервере есть другие сервисы (yes/no)" "${HARDEN:-yes}"
-  ask GEO_BLOCK    "Блокировать RU-домены/IP на выходе? (yes/no)"           "${GEO_BLOCK:-no}"
-  ask PQ           "Post-quantum Reality ML-KEM-768? экспериментально, тест Happ/v2RayTun (yes/no)" "${PQ:-no}"
-  ask TEST_SUB_UUID "Тестовый shortUuid для страницы (можно пусто)"      "${TEST_SUB_UUID:-}"
-  ask WDTT_PASS    "Пароль WDTT (пусто = сгенерировать случайный)"        "${WDTT_PASS:-}"
-  if [ "$ROLE" = exit ] && [ -n "$RELAY_IP" ]; then
-    ask AUTO_RELAY "После exit сразу развернуть релей на $RELAY_IP? (yes/no)" "${AUTO_RELAY:-yes}"
+  ask SLUG     "Slug для путей/контейнеров (a-z0-9-)"               "$dflt_slug"
+  ask SSH_PORT "SSH-порт (для UFW)"                                  "${SSH_PORT:-22}"
+  _ask_yn HARDEN "Hardening SSH+firewall? (yes/no)"                 "${HARDEN:-no}"
+
+  if [ "$ROLE" = exit ]; then
+    say ""
+    say "── Выходной сервер ─────────────────────────────────────"
+    ask MAIN_DOMAIN "Домен выходного сервера (панель/подписка)"     "${MAIN_DOMAIN:-}"
+    ask EXIT_IP     "Публичный IP выходного сервера"                "${EXIT_IP:-}"
+    ask EXIT_NAME   "Имя выходного узла (метка)"                    "${EXIT_NAME:-Moonlight}"
+    ask ACME_EMAIL  "E-mail для Let's Encrypt"                      "${ACME_EMAIL:-admin@${MAIN_DOMAIN:-example.com}}"
+    _ask_yn USE_TAILSCALE "Скрывать панель через Tailscale? (yes/no)"                "${USE_TAILSCALE:-yes}"
+    _ask_yn GEO_BLOCK     "Блокировать RU-домены/IP на выходе? (yes/no)"             "${GEO_BLOCK:-no}"
+    _ask_yn PQ            "Post-quantum Reality ML-KEM-768? экспериментально (yes/no)" "${PQ:-no}"
+    ask TEST_SUB_UUID "Тестовый shortUuid для страницы (можно пусто)"                "${TEST_SUB_UUID:-}"
+    ask WDTT_PASS     "Пароль WDTT (пусто = сгенерируется при деплое)"               "${WDTT_PASS:-}"
+
+    say ""
+    say "── Релей (оставьте IP пустым, если не планируете) ──────"
+    ask RELAY_IP "Публичный IP релея"                               "${RELAY_IP:-}"
+    if [ -n "$RELAY_IP" ]; then
+      ask RELAY_DOMAIN "Домен релея"                               "${RELAY_DOMAIN:-}"
+      ask RELAY_NAME   "Имя релея (метка)"                         "${RELAY_NAME:-Sunshine}"
+      _ask_yn AUTO_RELAY "После exit сразу развернуть релей на $RELAY_IP? (yes/no)" "${AUTO_RELAY:-yes}"
+    else
+      RELAY_DOMAIN="${RELAY_DOMAIN:-}"; RELAY_NAME="${RELAY_NAME:-Sunshine}"; AUTO_RELAY="no"
+    fi
   else
-    AUTO_RELAY="${AUTO_RELAY:-no}"
+    say ""
+    say "── Этот релей ──────────────────────────────────────────"
+    ask RELAY_DOMAIN "Домен этого релея"                           "${RELAY_DOMAIN:-}"
+    ask EXIT_IP      "IP выходного сервера (для пиринга)"          "${EXIT_IP:-}"
+    ask EXIT_NAME    "Имя выходного узла (метка)"                  "${EXIT_NAME:-Moonlight}"
+    ask RELAY_NAME   "Имя этого релея (метка)"                     "${RELAY_NAME:-Sunshine}"
+    ask ACME_EMAIL   "E-mail для Let's Encrypt"                    "${ACME_EMAIL:-admin@${RELAY_DOMAIN:-example.com}}"
+    MAIN_DOMAIN="${MAIN_DOMAIN:-}"; RELAY_IP="${RELAY_IP:-}"
+    USE_TAILSCALE="${USE_TAILSCALE:-no}"; GEO_BLOCK="${GEO_BLOCK:-no}"; PQ="${PQ:-no}"
+    TEST_SUB_UUID="${TEST_SUB_UUID:-}"; WDTT_PASS="${WDTT_PASS:-}"; AUTO_RELAY="no"
   fi
+
+  say ""
+  say "── Проверьте настройки ─────────────────────────────────"
+  for v in "${VARS[@]}"; do printf '  %-20s = %s\n' "$v" "${!v}"; done
+  say ""
+  local _ok; ask _ok "Сохранить? (yes — сохранить, no — начать заново)" "yes"
+  if [ "${_ok:-yes}" != yes ]; then say "Перезапуск визарда..."; wizard; return; fi
+
   : > "$CONF"; for v in "${VARS[@]}"; do printf '%s=%q\n' "$v" "${!v}" >> "$CONF"; done
   say "Сохранил $CONF"
 }
