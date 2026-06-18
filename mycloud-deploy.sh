@@ -155,6 +155,8 @@ do_reset(){
   say "СБРОС VPN-стека${SLUG:+ (slug: $SLUG)}: удалю контейнеры, тома и /opt/$SLUG. НЕОБРАТИМО."
   local a; read -rp "  Подтвердите словом YES: " a || true
   [ "$a" = "YES" ] || { say "Отменено."; return 0; }
+  say "После сброса сервер получит новый SSH-ключ. На своём ПК выполни:"
+  say "  ssh-keygen -R ${EXIT_IP:-<IP сервера>}"
   [ -f "$CONF" ] && cp -f "$CONF" "${CONF}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
   for s in panel sub caddy node decoy; do
     [ -f "/opt/$SLUG/$s/docker-compose.yml" ] && ( cd "/opt/$SLUG/$s" && docker compose down -v >/dev/null 2>&1 ) || true
@@ -356,8 +358,8 @@ wizard(){
   say "── Основное ────────────────────────────────────────────"
   ask ROLE     "Роль сервера: exit (выход/панель) или relay (релей)" "${ROLE:-exit}"
   ask BRAND    "Бренд (страница-декой)"                              "${BRAND:-MyCloud}"
-  local dflt_slug; dflt_slug="$(printf '%s' "${SLUG:-$BRAND}" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9-')"
-  ask SLUG     "Slug для путей/контейнеров (a-z0-9-)"               "$dflt_slug"
+  SLUG="$(printf '%s' "$BRAND" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9-')"
+  say "  Slug (авто из бренда): $SLUG"
   ask SSH_PORT "SSH-порт (для UFW)"                                  "${SSH_PORT:-22}"
   _ask_yn HARDEN "Hardening SSH+firewall? (yes/no)"                 "${HARDEN:-no}"
 
