@@ -371,7 +371,6 @@ wizard(){
     _ask_yn USE_TAILSCALE "Скрывать панель через Tailscale? (yes/no)"                "${USE_TAILSCALE:-yes}"
     _ask_yn GEO_BLOCK     "Блокировать RU-домены/IP на выходе? (yes/no)"             "${GEO_BLOCK:-no}"
     _ask_yn PQ            "Post-quantum Reality ML-KEM-768? экспериментально (yes/no)" "${PQ:-no}"
-    ask TEST_SUB_UUID "Тестовый shortUuid для страницы (можно пусто)"                "${TEST_SUB_UUID:-}"
     ask WDTT_PASS     "Пароль WDTT (пусто = сгенерируется при деплое)"               "${WDTT_PASS:-}"
     ask ADMIN_PASS    "Пароль admin-панели (пусто = сгенерируется при деплое)"         "${ADMIN_PASS:-}"
 
@@ -473,6 +472,27 @@ run(){
       # SECRET_KEY из keygen в .env ноды → squad → тест-юзер → хосты → подписка
       export DOMAIN="$MAIN_DOMAIN" NODE_NAME="$EXIT_NAME" NODE_ADDRESS="$EXIT_IP" XRAY_CONFIG_FILE="/opt/$SLUG/node/xray-profile.json"
       run_phase provision.sh
+      # Захватываем shortUuid тест-пользователя из Remnawave API
+      _capture_test_uuid(){
+        local _cred="/opt/$SLUG/credentials.txt"
+        local _pass; _pass="$(grep -E '^\s*pass:' "$_cred" 2>/dev/null | awk '{print $2}' | head -1 || true)"
+        [ -z "$_pass" ] && return 0
+        local _tok; _tok="$(curl -sf --max-time 6 -X POST http://127.0.0.1:3000/api/auth/login \
+          -H 'Content-Type: application/json' \
+          -d "{\"username\":\"admin\",\"password\":\"$_pass\"}" 2>/dev/null \
+          | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("response",{}).get("accessToken",""))' 2>/dev/null || true)"
+        [ -z "$_tok" ] && return 0
+        local _uuid; _uuid="$(curl -sf --max-time 6 -H "Authorization: Bearer $_tok" \
+          http://127.0.0.1:3000/api/users 2>/dev/null \
+          | python3 -c 'import sys,json;us=json.load(sys.stdin).get("response",{}).get("users",[]); print(us[0].get("shortUuid","") if us else "")' 2>/dev/null || true)"
+        [ -z "$_uuid" ] && return 0
+        TEST_SUB_UUID="$_uuid"
+        grep -q '^TEST_SUB_UUID=' "$CONF" 2>/dev/null \
+          && sed -i "s|^TEST_SUB_UUID=.*|TEST_SUB_UUID=$(printf '%q' "$_uuid")|" "$CONF" \
+          || printf 'TEST_SUB_UUID=%q\n' "$_uuid" >> "$CONF"
+        say "Тест-пользователь UUID: $_uuid"
+      }
+      _capture_test_uuid || true
       run_phase deploy-node.sh exit
       run_phase sync-hy2-cert.sh exit
       run_phase handoff-moonlight.sh
