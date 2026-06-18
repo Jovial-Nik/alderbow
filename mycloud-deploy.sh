@@ -26,7 +26,7 @@ if [ ! -f "$CONF" ]; then
   for __c in /opt/*/.deploy/deploy.conf; do [ -f "$__c" ] && { CONF="$__c"; break; }; done
 fi
 TPL_DIR=""
-VARS=(ROLE BRAND SLUG MAIN_DOMAIN RELAY_DOMAIN EXIT_IP RELAY_IP EXIT_NAME RELAY_NAME ACME_EMAIL USE_TAILSCALE SSH_PORT HARDEN GEO_BLOCK PQ TEST_SUB_UUID WDTT_PASS AUTO_RELAY)
+VARS=(ROLE BRAND SLUG MAIN_DOMAIN RELAY_DOMAIN EXIT_IP RELAY_IP EXIT_NAME RELAY_NAME ACME_EMAIL USE_TAILSCALE SSH_PORT HARDEN GEO_BLOCK PQ TEST_SUB_UUID WDTT_PASS ADMIN_PASS AUTO_RELAY)
 PH=(MAIN_DOMAIN RELAY_DOMAIN EXIT_IP RELAY_IP BRAND SLUG EXIT_NAME RELAY_NAME ACME_EMAIL SSH_PORT GEO_BLOCK PQ HARDEN TEST_SUB_UUID)
 ASSUME_YES=0
 if [ "${1:-}" = -y ] || [ "${1:-}" = --yes ]; then ASSUME_YES=1; shift || true; fi
@@ -92,9 +92,34 @@ do_info(){
       echo "  Подписка:  https://$MAIN_DOMAIN/api/sub/$sub_uuid"
       echo "  Страница:  https://$MAIN_DOMAIN/c/$sub_uuid/"
       echo "  (импортируй ссылку подписки в Shadowrocket/Happ/v2RayTun)"
-    else
-      echo "  shortUuid не задан — создай пользователя в панели, подписка появится в его карточке"
     fi
+    # попытка получить список пользователей через Remnawave API
+    local _token="" _users=""
+    if [ -n "$admin_pass" ]; then
+      _token="$(curl -sf --max-time 4 -X POST http://127.0.0.1:3000/api/auth/login \
+        -H 'Content-Type: application/json' \
+        -d "{\"username\":\"admin\",\"password\":\"$admin_pass\"}" 2>/dev/null \
+        | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("response",{}).get("accessToken",""))' 2>/dev/null || true)"
+    fi
+    if [ -n "$_token" ] && [ -n "$MAIN_DOMAIN" ]; then
+      _users="$(curl -sf --max-time 4 -H "Authorization: Bearer $_token" \
+        http://127.0.0.1:3000/api/users 2>/dev/null \
+        | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+us=d.get('response',{}).get('users',d.get('users',[]))
+for u in us:
+    uid=u.get('shortUuid',''); name=u.get('username',u.get('name','?'))
+    exp=u.get('expireAt','') or ''
+    exp=exp[:10] if exp else '∞'
+    if uid: print(f'  {name} (до {exp}):  https://${MAIN_DOMAIN}/api/sub/{uid}')
+" 2>/dev/null || true)"
+      if [ -n "$_users" ]; then
+        echo "── Пользователи (активные подписки) ──"
+        echo "$_users"
+      fi
+    fi
+    [ -z "$sub_uuid" ] && [ -z "$_users" ] && echo "  shortUuid не задан — создай пользователя в панели"
     echo
     echo "── Доступ к панели (не публична) ──"
     [ -n "$ts_url" ] && echo "  Tailscale:  $ts_url"
@@ -105,6 +130,14 @@ do_info(){
     echo "  Сервер:  $EXIT_IP   DTLS: 56000/udp · WG: 56001/udp"
     echo "  Пароль:  ${wdtt_pass:-<см. $CRED>}"
     echo "  iOS:  github.com/anton48/vk-turn-proxy-ios → режим SRTP-WRAP-A"
+    if [ -n "$wdtt_pass" ] && [ -n "$EXIT_IP" ]; then
+      if command -v qrencode >/dev/null 2>&1; then
+        echo "  QR (пароль для приложения):"
+        qrencode -t ANSIUTF8 -m 1 "$wdtt_pass" 2>/dev/null || true
+      else
+        echo "  (установи qrencode для QR-кода: apt-get install -y qrencode)"
+      fi
+    fi
     echo
     echo "── Файлы ──"
     echo "  Доступы:  $CRED"
@@ -120,6 +153,7 @@ do_reset(){
   say "СБРОС VPN-стека${SLUG:+ (slug: $SLUG)}: удалю контейнеры, тома и /opt/$SLUG. НЕОБРАТИМО."
   local a; read -rp "  Подтвердите словом YES: " a || true
   [ "$a" = "YES" ] || { say "Отменено."; return 0; }
+  [ -f "$CONF" ] && cp -f "$CONF" "${CONF}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
   for s in panel sub caddy node decoy; do
     [ -f "/opt/$SLUG/$s/docker-compose.yml" ] && ( cd "/opt/$SLUG/$s" && docker compose down -v >/dev/null 2>&1 )
   done
@@ -132,6 +166,129 @@ do_reset(){
   rm -rf "/opt/$SLUG"; rm -f "$CONF"
   say "Готово. Контейнеры сейчас:"; docker ps --format '  {{.Names}}' 2>/dev/null
   say "Дальше чистый деплой: запусти $0 → визард → пункт 1."
+}
+
+do_preflight(){
+  # Обязательные поля по роли
+  local ok=true
+  _need(){ [ -n "${!1}" ] || { say "ОШИБКА: $1 не задан (запусти wizard)"; ok=false; }; }
+  _ip(){ [[ "${!1}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { say "ПРЕДУПРЕЖДЕНИЕ: $1=${!1} не похоже на IPv4"; }; }
+  case "${ROLE:-exit}" in
+    exit|moonlight)
+      _need MAIN_DOMAIN; _need EXIT_IP; _ip EXIT_IP ;;
+    relay|sunshine)
+      _need RELAY_DOMAIN; _need EXIT_IP; _ip EXIT_IP ;;
+  esac
+  $ok || die "Исправь конфиг перед деплоем."
+  # Проверка портов 80/443
+  for _p in 80 443; do
+    if ss -tlnp 2>/dev/null | grep -q ":$_p "; then
+      say "ПРЕДУПРЕЖДЕНИЕ: порт $_p уже занят ($(ss -tlnp | grep ":$_p " | awk '{print $NF}' | head -1))"
+    fi
+  done
+}
+
+do_stages(){
+  load 2>/dev/null || true
+  local what="${ROLE:-exit}"
+  echo "Фазы для роли '$(c '1;32' "$what")' (--from <фаза> пропускает до указанной):"
+  case "$what" in
+    exit|moonlight)
+      echo "  wdtt-build.sh"
+      echo "  deploy-moonlight.sh"
+      echo "  provision.sh"
+      echo "  deploy-node.sh exit"
+      echo "  sync-hy2-cert.sh exit"
+      echo "  handoff-moonlight.sh"
+      echo "  kick-node.sh exit"
+      echo "  stealth.sh decoy"
+      echo "  stealth.sh caddy"
+      echo "  deploy-decoy-pro.sh"
+      echo "  deploy-decoy-pages.sh"
+      echo "  setup-connect-min.sh"
+      echo "  health-check.sh"
+      [ "${USE_TAILSCALE:-no}" = yes ] && echo "  setup-tailscale.sh" ;;
+    relay|sunshine)
+      echo "  provision-relay.sh"
+      echo "  setup-relay-ssh.sh"
+      echo "  kick-node.sh relay"
+      echo "  health-check.sh" ;;
+    sunshine-node)
+      echo "  deploy-sunshine.sh"
+      echo "  sync-hy2-cert.sh relay"
+      echo "  deploy-node.sh relay"
+      echo "  deploy-decoy-sunshine.sh"
+      echo "  health-check.sh" ;;
+  esac
+  echo ""
+  echo "Пример: bash $0 --from provision.sh run"
+}
+
+do_rotate(){
+  load
+  local CRED="/opt/$SLUG/credentials.txt"
+  say "Ротация паролей (панель Remnawave + WDTT)"
+
+  # Читаем текущий пароль для API
+  local cur_pass; cur_pass="$(grep -E '^\s*pass:' "$CRED" 2>/dev/null | awk '{print $2}' | head -1)"
+  [ -z "$cur_pass" ] && die "Не могу прочитать текущий пароль из $CRED"
+
+  local new_admin new_wdtt
+  read -rp "  Новый пароль admin (Enter = сгенерировать): " new_admin || true
+  [ -z "$new_admin" ] && new_admin="$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)Aa1!"
+
+  read -rp "  Новый пароль WDTT (Enter = сгенерировать): " new_wdtt || true
+  [ -z "$new_wdtt" ] && new_wdtt="$(openssl rand -base64 12 | tr -d '/+=')"
+
+  # Получаем токен Remnawave
+  local token=""
+  token="$(curl -sf --max-time 6 -X POST http://127.0.0.1:3000/api/auth/login \
+    -H 'Content-Type: application/json' \
+    -d "{\"username\":\"admin\",\"password\":\"$cur_pass\"}" 2>/dev/null \
+    | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("response",{}).get("accessToken",""))' 2>/dev/null || true)"
+
+  if [ -n "$token" ]; then
+    local rc; rc="$(curl -sf --max-time 6 -o /dev/null -w '%{http_code}' \
+      -X PATCH http://127.0.0.1:3000/api/auth/change-password \
+      -H 'Content-Type: application/json' \
+      -H "Authorization: Bearer $token" \
+      -d "{\"oldPassword\":\"$cur_pass\",\"newPassword\":\"$new_admin\"}" 2>/dev/null || echo 0)"
+    if [ "$rc" = 200 ] || [ "$rc" = 201 ]; then
+      say "Admin пароль обновлён."
+      sed -i "s|  pass: .*|  pass: $new_admin|" "$CRED" 2>/dev/null || true
+      ADMIN_PASS="$new_admin"
+      grep -q '^ADMIN_PASS=' "$CONF" 2>/dev/null \
+        && sed -i "s|^ADMIN_PASS=.*|ADMIN_PASS=$(printf '%q' "$new_admin")|" "$CONF" \
+        || printf 'ADMIN_PASS=%q\n' "$new_admin" >> "$CONF"
+    else
+      say "ПРЕДУПРЕЖДЕНИЕ: API вернул $rc — пароль панели не изменён. Смени вручную в Settings → Change Password."
+    fi
+  else
+    say "ПРЕДУПРЕЖДЕНИЕ: не удалось авторизоваться в Remnawave API. Смени пароль вручную в панели."
+  fi
+
+  # WDTT: ищем конфиг
+  local wdtt_cfg="/opt/$SLUG/wdtt/wdtt.conf"
+  if [ -f "$wdtt_cfg" ]; then
+    sed -i "s|^password=.*|password=$new_wdtt|" "$wdtt_cfg" 2>/dev/null \
+      && docker restart "${SLUG:-mycloud}-wdtt" >/dev/null 2>&1 \
+      && say "WDTT пароль обновлён и контейнер перезапущен." \
+      || say "ПРЕДУПРЕЖДЕНИЕ: не удалось обновить WDTT конфиг — обнови вручную в $wdtt_cfg"
+    # Обновляем credentials.txt
+    grep -q 'wdtt-password:' "$CRED" 2>/dev/null \
+      && sed -i "s|  wdtt-password: .*|  wdtt-password: $new_wdtt|" "$CRED" \
+      || printf '  wdtt-password: %s\n' "$new_wdtt" >> "$CRED"
+    WDTT_PASS="$new_wdtt"
+    grep -q '^WDTT_PASS=' "$CONF" 2>/dev/null \
+      && sed -i "s|^WDTT_PASS=.*|WDTT_PASS=$(printf '%q' "$new_wdtt")|" "$CONF" \
+      || printf 'WDTT_PASS=%q\n' "$new_wdtt" >> "$CONF"
+  else
+    say "ПРЕДУПРЕЖДЕНИЕ: конфиг WDTT не найден по $wdtt_cfg — обнови пароль вручную."
+    say "Новый WDTT пароль: $new_wdtt"
+  fi
+
+  say ""; say "Новые данные:"; say "  Admin:  $new_admin"; say "  WDTT:   $new_wdtt"
+  say "Обновлено в: $CRED"
 }
 
 ask(){ local var="$1" prompt="$2" def="${3:-}" cur ans; cur="${!var:-$def}"; if [ "${ASSUME_YES:-0}" = 1 ]; then printf -v "$var" '%s' "$cur"; return; fi
@@ -172,6 +329,7 @@ wizard(){
     _ask_yn PQ            "Post-quantum Reality ML-KEM-768? экспериментально (yes/no)" "${PQ:-no}"
     ask TEST_SUB_UUID "Тестовый shortUuid для страницы (можно пусто)"                "${TEST_SUB_UUID:-}"
     ask WDTT_PASS     "Пароль WDTT (пусто = сгенерируется при деплое)"               "${WDTT_PASS:-}"
+    ask ADMIN_PASS    "Пароль admin-панели (пусто = сгенерируется при деплое)"         "${ADMIN_PASS:-}"
 
     say ""
     say "── Релей (оставьте IP пустым, если не планируете) ──────"
@@ -193,7 +351,7 @@ wizard(){
     ask ACME_EMAIL   "E-mail для Let's Encrypt"                    "${ACME_EMAIL:-admin@${RELAY_DOMAIN:-example.com}}"
     MAIN_DOMAIN="${MAIN_DOMAIN:-}"; RELAY_IP="${RELAY_IP:-}"
     USE_TAILSCALE="${USE_TAILSCALE:-no}"; GEO_BLOCK="${GEO_BLOCK:-no}"; PQ="${PQ:-no}"
-    TEST_SUB_UUID="${TEST_SUB_UUID:-}"; WDTT_PASS="${WDTT_PASS:-}"; AUTO_RELAY="no"
+    TEST_SUB_UUID="${TEST_SUB_UUID:-}"; WDTT_PASS="${WDTT_PASS:-}"; ADMIN_PASS="${ADMIN_PASS:-}"; AUTO_RELAY="no"
   fi
 
   say ""
@@ -203,6 +361,7 @@ wizard(){
   local _ok; ask _ok "Сохранить? (yes — сохранить, no — начать заново)" "yes"
   if [ "${_ok:-yes}" != yes ]; then say "Перезапуск визарда..."; wizard; return; fi
 
+  [ -f "$CONF" ] && cp -f "$CONF" "${CONF}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
   : > "$CONF"; for v in "${VARS[@]}"; do printf '%s=%q\n' "$v" "${!v}" >> "$CONF"; done
   say "Сохранил $CONF"
   local _show; ask _show "Показать данные для подключения? (yes/no)" "yes"
@@ -232,7 +391,12 @@ phase(){ local script="$1"; shift || true
   say "Фаза: $script${*:+ $*}"
   local f="$WORK/$script"; render "$script" "$f"
   bash -n "$f" || die "синтаксическая ошибка в $script после рендера"
-  bash "$f" "$@"; say "Готово: $script"; }
+  if [ -n "${LOG_FILE:-}" ]; then
+    bash "$f" "$@" 2>&1 | tee -a "$LOG_FILE"; [ "${PIPESTATUS[0]}" = 0 ] || die "ошибка в $script"
+  else
+    bash "$f" "$@"
+  fi
+  say "Готово: $script"; }
 
 # обёртка для --from: пропускаем фазы до FROM_STAGE включительно, далее выполняем всё
 run_phase(){
@@ -243,8 +407,12 @@ run_phase(){
 run(){
   load; ensure_templates
   WORK="/opt/$SLUG/.deploy"; mkdir -p "$WORK"
+  LOG_FILE="/opt/$SLUG/deploy.log"
+  echo "=== Деплой $(date '+%Y-%m-%d %H:%M:%S')${FROM_STAGE:+ --from $FROM_STAGE} ===" >> "$LOG_FILE"
+  say "Лог деплоя: $LOG_FILE"
   # сохраняем conf рядом с инстансом — чтобы будущий ре-деплой нашёл реальные значения откуда угодно
   [ -f "$CONF" ] && [ "$CONF" != "$WORK/deploy.conf" ] && cp -f "$CONF" "$WORK/deploy.conf" 2>/dev/null || true
+  do_preflight
   # префлайт: убрать конфликтующие контейнеры ДРУГИХ slug (host-network Caddy/декой дерутся за порты)
   local __c; for __c in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E -- '-(caddy|decoy|decoy-php)$' | grep -vE "^${SLUG}-"); do
     docker rm -f "$__c" >/dev/null 2>&1 && say "префлайт: убрал конфликтующий контейнер чужого slug — $__c"
@@ -5710,6 +5878,8 @@ case "${1:-menu}" in
   update)  do_update ;;
   info)    do_info ;;
   reset)   do_reset ;;
+  rotate)  do_rotate ;;
+  stages)  do_stages ;;
   run)     run "${2:-}" ;;
   exit|moonlight) run exit ;;
   relay|sunshine) run relay ;;
@@ -5724,15 +5894,19 @@ case "${1:-menu}" in
     echo "  4) Показать конфиг"
     echo "  5) Проверить серверы снаружи (probe)"
     echo "  6) Обновить компоненты (update)"
-    echo "  7) Полный сброс — снести стек начисто (reset)"
-    echo "  8) Выход"
+    echo "  7) Сменить пароли (rotate)"
+    echo "  8) Список фаз деплоя (stages)"
+    echo "  9) Полный сброс — снести стек начисто (reset)"
+    echo "  0) Выход"
     read -rp "  Выбор [1]: " ch || true
     case "${ch:-1}" in
       1) run "$ROLE" ;; 2) do_info ;; 3) wizard ;;
       4) for v in "${VARS[@]}"; do printf '%s=%s\n' "$v" "${!v}"; done ;;
       5) load; do_probe "$MAIN_DOMAIN" "$RELAY_DOMAIN" ;;
       6) do_update ;;
-      7) do_reset ;;
+      7) do_rotate ;;
+      8) do_stages ;;
+      9) do_reset ;;
       *) exit 0 ;;
     esac ;;
   *) die "неизвестная команда: $1" ;;
