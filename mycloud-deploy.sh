@@ -5,7 +5,7 @@
 #      sudo bash mycloud-deploy.sh
 #  Спросит данные по SSH -> deploy.conf, распакует шаблоны, отрендерит твоими
 #  значениями и развернёт по фазам, с паузами на ручные шаги панели.
-#  Подкоманды: wizard | config | render <имя> | run <фаза|all> | extract <каталог> | probe [хост…]
+#  Подкоманды: wizard | config | render <имя> | run <фаза|all> | extract <каталог> | probe [хост…] | verify
 # =============================================================================
 set -euo pipefail
 # --- пре-парсер: вытащить --from <этап> ДО основного диспетчера (он знает только run/wizard/…) ---
@@ -150,6 +150,180 @@ for u in us:
     echo "════════════════════════════════════════════════════════════"
   } | tee "$SUMMARY" 2>/dev/null
   chmod 600 "$SUMMARY" 2>/dev/null || true
+}
+
+# do_verify — сверяет ЖЕЛАЕМОЕ состояние (панель: node.activeInbounds,
+# squad.inbounds, securityLayer у hosts) с ФАКТИЧЕСКИМ (что реально видит
+# живой Xray-процесс в контейнере ноды через internal-сокет). Находит drift
+# без ручной диагностики через docker logs/API одноразовыми curl-командами —
+# именно так пришлось искать все баги XHTTP/relay в этом проекте.
+# Запускать НА ТОМ сервере, чью ноду проверяешь (Moonlight — для exit,
+# Sunshine — для relay/sunshine-node).
+do_verify(){
+  local -   # сохраняет set -e/pipefail и авто-восстанавливает при выходе из функции (bash 4.4+)
+  set +e; set +o pipefail   # ниже полно "grep && die" / "cmd && break" — под set -e они бы падали на первом же непустом совпадении
+  load 2>/dev/null || die "Нет конфига — деплой ещё не делался"
+  local B="/opt/$SLUG" CRED="$B/credentials.txt"
+  [ -f "$CRED" ] || die "нет $CRED — деплой не завершён"
+  local ADMIN_PASS; ADMIN_PASS="$(grep -E '^\s*pass:' "$CRED" | awk '{print $2}' | head -1)"
+  [ -n "$ADMIN_PASS" ] || die "не нашёл пароль в $CRED"
+
+  local PANEL_DOMAIN NODE_NAME SQUAD_NAME="${SQUAD_NAME:-main}"
+  if [ "$ROLE" = exit ] || [ "$ROLE" = moonlight ]; then
+    PANEL_DOMAIN="$MAIN_DOMAIN"; NODE_NAME="$EXIT_NAME"
+  else
+    # на конфиге relay/sunshine-node RELAY_DOMAIN хранит домен Moonlight
+    # (так его пишет setup-relay-ssh.sh) — панель всегда там
+    PANEL_DOMAIN="$RELAY_DOMAIN"; NODE_NAME="$RELAY_NAME"
+  fi
+  local FAIL=0
+  ok(){ echo "  $(c '1;32' '✓') $*"; }
+  warn(){ echo "  $(c '1;33' '!') $*"; FAIL=1; }
+
+  say "Верификация: нода '$NODE_NAME', squad '$SQUAD_NAME' (роль: $ROLE)"
+
+  local API_BASE RESOLVE_ARGS=()
+  status_ok(){ local code; code="$(curl -sS -k -o /dev/null "${RESOLVE_ARGS[@]}" -w '%{http_code}' "${API_BASE}/auth/status" 2>/dev/null)"; [ -n "$code" ] && [ "$code" -ge 200 ] 2>/dev/null && [ "$code" -lt 500 ] 2>/dev/null; }
+  API_BASE="https://localhost:8081/api"; RESOLVE_ARGS=()
+  if ! status_ok; then
+    local p
+    for p in 443 8443; do
+      API_BASE="https://${PANEL_DOMAIN}:${p}/api"; RESOLVE_ARGS=(--resolve "${PANEL_DOMAIN}:${p}:127.0.0.1")
+      status_ok && break
+    done
+  fi
+  status_ok || die "панель не отвечает (ни localhost:8081, ни $PANEL_DOMAIN:443/8443)"
+
+  local TMP; TMP="$(mktemp -d)"
+  trap 'rm -rf "$TMP"' RETURN
+
+  curl -sS -k "${RESOLVE_ARGS[@]}" -X POST "${API_BASE}/auth/login" \
+    -H 'Content-Type: application/json' -H 'X-Remnawave-Client-Type: browser' \
+    -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}" -o "$TMP/login.json"
+  local TOKEN; TOKEN="$(python3 -c "import json;print(json.load(open('$TMP/login.json')).get('response',{}).get('accessToken',''))" 2>/dev/null)"
+  [ -n "$TOKEN" ] || die "не получил токен от панели"
+
+  api_get(){ curl -sS -k "${RESOLVE_ARGS[@]}" "${API_BASE}$1" -H "Authorization: Bearer $TOKEN" -H 'X-Remnawave-Client-Type: browser'; }
+
+  # ── 1. activeInbounds ноды в панели ──────────────────────────────────────
+  api_get "/nodes" > "$TMP/nodes.json"
+  python3 - "$TMP/nodes.json" "$NODE_NAME" "$TMP/active_tags.json" <<'PY'
+import sys, json
+nodes_f, name, out_f = sys.argv[1], sys.argv[2], sys.argv[3]
+d = json.load(open(nodes_f))
+arr = d.get("response") if isinstance(d, dict) else d
+if isinstance(arr, dict): arr = arr.get("nodes") or arr.get("data") or []
+node = next((n for n in (arr or []) if isinstance(n, dict) and n.get("name") == name), None)
+if not node:
+    json.dump({"__error__": "not found"}, open(out_f, "w")); sys.exit(0)
+ai = (node.get("configProfile") or {}).get("activeInbounds") or []
+tags = sorted(x.get("tag") for x in ai if isinstance(x, dict) and x.get("tag"))
+json.dump(tags, open(out_f, "w"))
+PY
+  grep -q '__error__' "$TMP/active_tags.json" 2>/dev/null && die "нода '$NODE_NAME' не найдена в панели"
+  local ACTIVE_TAGS; ACTIVE_TAGS="$(cat "$TMP/active_tags.json")"
+  ok "activeInbounds ноды в панели: $ACTIVE_TAGS"
+
+  # ── 2. squad.inbounds ─────────────────────────────────────────────────────
+  api_get "/internal-squads" > "$TMP/squads.json"
+  python3 - "$TMP/squads.json" "$SQUAD_NAME" <<'PY' > "$TMP/squad_uuid.txt"
+import sys, json
+d = json.load(open(sys.argv[1]))
+arr = d.get("response", {}).get("internalSquads") or []
+print(next((s.get("uuid") for s in arr if s.get("name") == sys.argv[2]), ""))
+PY
+  local SQUAD_UUID; SQUAD_UUID="$(cat "$TMP/squad_uuid.txt")"
+  [ -n "$SQUAD_UUID" ] || die "squad '$SQUAD_NAME' не найден"
+
+  api_get "/internal-squads/$SQUAD_UUID" > "$TMP/squad.json"
+  python3 - "$TMP/squad.json" <<'PY' > "$TMP/squad_tags.json"
+import sys, json
+d = json.load(open(sys.argv[1]))
+r = d.get("response", d)
+tags = sorted(x.get("tag") for x in (r.get("inbounds") or []) if x.get("tag"))
+json.dump(tags, sys.stdout)
+PY
+  local SQUAD_TAGS; SQUAD_TAGS="$(cat "$TMP/squad_tags.json")"
+
+  python3 - "$TMP/active_tags.json" "$TMP/squad_tags.json" <<'PY' > "$TMP/missing_squad.json"
+import sys, json
+a = set(json.load(open(sys.argv[1])))
+b = set(json.load(open(sys.argv[2])))
+json.dump(sorted(a - b), sys.stdout)
+PY
+  local MISSING_SQUAD; MISSING_SQUAD="$(cat "$TMP/missing_squad.json")"
+  if [ "$MISSING_SQUAD" = "[]" ]; then
+    ok "все активные инбаунды ноды присутствуют в squad"
+  else
+    warn "инбаунды есть у ноды, но ОТСУТСТВУЮТ в squad: $MISSING_SQUAD — трафик по ним не пойдёт клиентам (чинит: --from provision.sh / provision-relay.sh)"
+  fi
+
+  # ── 3. живой конфиг Xray в контейнере ноды ───────────────────────────────
+  say "Живой конфиг Xray в контейнере ноды (internal-сокет)"
+  docker exec -i remnanode python3 - <<'PY' > "$TMP/live_tags.json" 2>/dev/null || echo '[]' > "$TMP/live_tags.json"
+import json, os, glob, http.client, socket, sys
+socks = glob.glob('/run/remnawave-internal-*.sock')
+if not socks: json.dump([], sys.stdout); sys.exit(0)
+pid = (os.popen('pgrep rw-core').read().strip() or '0').split()
+pid = pid[0] if pid else '0'
+tok = ''
+try:
+    for p in open('/proc/%s/cmdline' % pid).read().split('\x00'):
+        if 'token=' in p: tok = p.split('token=', 1)[1]; break
+except Exception:
+    json.dump([], sys.stdout); sys.exit(0)
+class U(http.client.HTTPConnection):
+    def __init__(s, p): super().__init__('localhost'); s.p = p
+    def connect(s):
+        so = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); so.connect(s.p); s.sock = so
+try:
+    c = U(socks[0]); c.request('GET', '/internal/get-config?token=' + tok)
+    cfg = json.loads(c.getresponse().read())
+except Exception:
+    json.dump([], sys.stdout); sys.exit(0)
+json.dump(sorted(i.get('tag') for i in cfg.get('inbounds', []) if i.get('tag')), sys.stdout)
+PY
+  local LIVE_TAGS; LIVE_TAGS="$(cat "$TMP/live_tags.json")"
+  ok "реально поднято в Xray: $LIVE_TAGS"
+
+  python3 - "$TMP/active_tags.json" "$TMP/live_tags.json" <<'PY' > "$TMP/missing_live.json"
+import sys, json
+a = set(json.load(open(sys.argv[1])))
+b = set(json.load(open(sys.argv[2])))
+json.dump(sorted(a - b), sys.stdout)
+PY
+  local MISSING_LIVE; MISSING_LIVE="$(cat "$TMP/missing_live.json")"
+  if [ "$MISSING_LIVE" = "[]" ]; then
+    ok "все activeInbounds панели реально подняты в живом Xray"
+  else
+    warn "инбаунды активны в панели, но НЕ подняты в живом Xray: $MISSING_LIVE — попробуй: docker restart remnanode, либо kick-node.sh"
+  fi
+
+  # ── 4. hosts: securityLayer заполнен? (типичный симптом опечатки в поле) ─
+  say "Hosts — заполнен ли securityLayer"
+  api_get "/hosts" > "$TMP/hosts.json"
+  python3 - "$TMP/hosts.json" <<'PY' > "$TMP/bad_hosts.json"
+import sys, json
+d = json.load(open(sys.argv[1]))
+r = d.get("response", d)
+arr = r.get("hosts", r) if isinstance(r, dict) else r
+bad = [h.get("remark") for h in (arr or []) if isinstance(h, dict) and not h.get("securityLayer")]
+json.dump(bad, sys.stdout)
+PY
+  local BAD_HOSTS; BAD_HOSTS="$(cat "$TMP/bad_hosts.json")"
+  if [ "$BAD_HOSTS" = "[]" ]; then
+    ok "у всех hosts заполнен securityLayer"
+  else
+    warn "hosts БЕЗ securityLayer (API молча подставляет DEFAULT/REALITY вместо задуманного): $BAD_HOSTS"
+  fi
+
+  echo
+  if [ "$FAIL" = 0 ]; then
+    echo "$(c '1;32' '════ ВЕРИФИКАЦИЯ ПРОШЛА — состояние панели и живого Xray совпадают ════')"
+  else
+    echo "$(c '1;31' '════ НАЙДЕНЫ РАСХОЖДЕНИЯ — см. предупреждения выше ════')"
+    return 1
+  fi
 }
 
 do_reset(){
@@ -6425,6 +6599,7 @@ case "${1:-menu}" in
   backup)  do_backup ;;
   restore) do_restore "${2:-}" || true ;;
   info)    do_info ;;
+  verify)  do_verify ;;
   reset)   do_reset ;;
   rotate)  do_rotate ;;
   stages)  do_stages ;;
@@ -6441,6 +6616,7 @@ case "${1:-menu}" in
     echo "  3) Перенастроить (wizard)"
     echo "  4) Показать конфиг"
     echo "  5) Проверить серверы снаружи (probe)"
+    echo "  v) Сверить панель с живым Xray — найти расхождения (verify)"
     echo "  6) Обновить компоненты (update)"
     echo "  7) Бэкап конфигов и БД (backup)"
     echo "  b) Восстановить из бэкапа (restore)"
@@ -6453,6 +6629,7 @@ case "${1:-menu}" in
       1) run "$ROLE" ;; 2) do_info ;; 3) wizard ;;
       4) for v in "${VARS[@]}"; do printf '%s=%s\n' "$v" "${!v:-}"; done ;;
       5) load; do_probe "$MAIN_DOMAIN" "$RELAY_DOMAIN" ;;
+      v|V) do_verify ;;
       6) do_update ;;
       7) do_backup ;;
       b|B) do_restore || true ;;
