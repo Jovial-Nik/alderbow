@@ -163,7 +163,8 @@ do_verify(){
   local -   # сохраняет set -e/pipefail и авто-восстанавливает при выходе из функции (bash 4.4+)
   set +e; set +o pipefail   # ниже полно "grep && die" / "cmd && break" — под set -e они бы падали на первом же непустом совпадении
   load 2>/dev/null || die "Нет конфига — деплой ещё не делался"
-  local B="/opt/$SLUG" CRED="$B/credentials.txt"
+  local B="/opt/$SLUG"
+  local CRED="$B/credentials.txt"
   [ -f "$CRED" ] || die "нет $CRED — деплой не завершён"
   local ADMIN_PASS; ADMIN_PASS="$(grep -E '^\s*pass:' "$CRED" | awk '{print $2}' | head -1)"
   [ -n "$ADMIN_PASS" ] || die "не нашёл пароль в $CRED"
