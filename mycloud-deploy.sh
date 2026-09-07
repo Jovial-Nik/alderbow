@@ -129,9 +129,13 @@ for u in us:
     echo "  Логин:  admin  /  ${admin_pass:-<см. $CRED>}"
     echo
     echo "── WDTT (мобильный TURN-канал, форк ildarmaga/wdtt) ──"
-    echo "  Сервер:  $EXIT_IP   DTLS: 56000/udp · WG: 56001/udp · CSQTT: 46000/udp"
+    echo "  Сервер:  $EXIT_IP   WG: 56001/udp"
+    echo "  Транспорты (один сервер, режим выбирается в клиенте):"
+    echo "     • SRTP-WRAP-A — порт 56000/udp (классический, по умолчанию)"
+    echo "     • CSQTT       — порт 46000/udp (новый; нет forward secrecy — пароль = единственный ключ)"
     echo "  Пароль:  ${wdtt_pass:-<см. $CRED>}"
-    echo "  iOS:  github.com/anton48/vk-turn-proxy-ios → режим SRTP-WRAP-A (или wdtt://-ссылка из панели)"
+    echo "  iOS:  github.com/anton48/vk-turn-proxy-ios (CSQTT: build364+) — импорт wdtt://-ссылки из панели,"
+    echo "        затем при желании Server mode → csqtt и порт → 46000"
     echo "  Панель WDTT (не публична): ssh -L 2860:127.0.0.1:2860 root@$EXIT_IP  →  http://localhost:2860/wdtt/"
     echo "           логин: $(grep -E '^\s*wdtt-panel:' "$CRED" 2>/dev/null | sed 's/^[^(]*(//; s/)$//' || echo 'admin / wdtt — смени')"
     if [ -n "$wdtt_pass" ] && [ -n "$EXIT_IP" ]; then
