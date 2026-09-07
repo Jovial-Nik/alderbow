@@ -127,6 +127,9 @@ for u in us:
     [ -n "$ts_url" ] && echo "  Tailscale:  $ts_url"
     echo "  SSH-туннель: ssh -L 8081:127.0.0.1:8081 root@$EXIT_IP  →  https://localhost:8081"
     echo "  Логин:  admin  /  ${admin_pass:-<см. $CRED>}"
+    echo "  Если SSH ругается 'REMOTE HOST IDENTIFICATION HAS CHANGED' (сервер"
+    echo "  переустановлен/сброшен) — удали старый ключ на СВОЁМ ПК и подключись заново:"
+    echo "     ssh-keygen -R $EXIT_IP    ${RELAY_IP:+&&  ssh-keygen -R $RELAY_IP}"
     echo
     echo "── WDTT (мобильный TURN-канал, форк ildarmaga/wdtt) ──"
     echo "  Сервер:  $EXIT_IP   WG: 56001/udp"
