@@ -252,15 +252,31 @@ sudo bash mycloud-deploy.sh --from provision-relay.sh run relay
 | `/opt/<slug>/deploy.log` | лог всех прогонов деплоя |
 | `/opt/<slug>/backups/*.tar.gz` | архивы, созданные командой `backup` |
 
-Панель НЕ публична (если `USE_TAILSCALE=yes`). Доступ к ней:
-- **Tailscale**: `https://<node>.<tailnet>.ts.net:8444` (после `tailscale up`
-  на своём устройстве в том же тайлнете)
-- **SSH-туннель** (фолбэк, работает всегда):
-  ```bash
-  ssh -L 8081:127.0.0.1:8081 root@<IP_MOONLIGHT>
-  # затем открыть в браузере https://localhost:8081 (сертификат
-  # самоподписанный, это нормально — подтвердить "продолжить")
-  ```
+Панели (Remnawave и WDTT) НЕ публичны. Доступ — только через SSH-туннель.
+Tailscale больше не используем: его MagicDNS ломает DNS сервера (см. раздел 6.3,
+грабли про Tailscale).
+
+```bash
+# панель Remnawave:
+ssh -L 8081:127.0.0.1:8081 root@<IP_MOONLIGHT>
+# → https://localhost:8081 (самоподписанный сертификат — подтвердить "продолжить")
+# логин admin, пароль — строка pass: в credentials.txt (или команда info)
+
+# панель WDTT (аварийный канал):
+ssh -L 2860:127.0.0.1:2860 root@<IP_MOONLIGHT>
+# → http://localhost:2860/wdtt/ (admin / wdtt — сменить при первом входе)
+```
+
+**Если SSH отказывает с `REMOTE HOST IDENTIFICATION HAS CHANGED` / `Host key
+verification failed`** — сервер переустановили или сбрасывали (`reset`), и его
+host-ключ стал новым. Удали устаревший ключ из `~/.ssh/known_hosts` на СВОЁМ ПК
+и подключись заново (один раз переспросит подтверждение нового ключа). Ключ один
+на сервер — чинит доступ и к 8081, и к 2860:
+
+```bash
+ssh-keygen -R <IP_MOONLIGHT>
+ssh-keygen -R <IP_SUNSHINE>   # если есть релей
+```
 
 ---
 
