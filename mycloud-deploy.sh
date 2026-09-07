@@ -424,6 +424,23 @@ do_restore(){
     say "  credentials.txt"
   fi
 
+  # Reality-ключи и bootstrap релея
+  if [ -f "$tmp/reality.env" ]; then
+    mkdir -p "$B/node"; cp "$tmp/reality.env" "$B/node/reality.env"; say "  node/reality.env (Reality-ключи)"
+  fi
+  for f in relay-bootstrap.env node-Sunshine.env; do
+    [ -f "$tmp/$f" ] && cp "$tmp/$f" "$B/$f" && say "  $f"
+  done
+
+  # WDTT: пользователи/пароль/ключи (панель форка не должна быть запущена при копировании)
+  if [ -d "$tmp/etc-wdtt" ]; then
+    systemctl stop wdtt 2>/dev/null || true
+    mkdir -p /etc/wdtt; cp -a "$tmp/etc-wdtt/." /etc/wdtt/ 2>/dev/null \
+      && say "  /etc/wdtt восстановлен (пользователи WDTT)" \
+      || say "  ! не удалось восстановить /etc/wdtt"
+    systemctl start wdtt 2>/dev/null || true
+  fi
+
   # PostgreSQL
   if [ -f "$tmp/pg.sql" ]; then
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^remnawave-db$'; then
@@ -488,6 +505,21 @@ do_backup(){
     [ -f "$B/$f" ] && cp "$B/$f" "$bdir/$f" && say "  $f"
   done
 
+  # НЕЗАМЕНИМОЕ: Reality-ключи и bootstrap релея (без них восстановленный
+  # сервер разъедется с сохранённой БД хостов — новые ключи ≠ старые)
+  [ -f "$B/node/reality.env" ] && cp "$B/node/reality.env" "$bdir/reality.env" && say "  node/reality.env (Reality-ключи)"
+  for f in relay-bootstrap.env node-Sunshine.env; do
+    [ -f "$B/$f" ] && cp "$B/$f" "$bdir/$f" && say "  $f"
+  done
+
+  # WDTT: пользователи и main-пароль (панель форка) + ключи WireGuard
+  if [ -d /etc/wdtt ]; then
+    mkdir -p "$bdir/etc-wdtt"
+    cp -a /etc/wdtt/. "$bdir/etc-wdtt/" 2>/dev/null \
+      && say "  /etc/wdtt (panel.db — пользователи WDTT, wg-keys)" \
+      || say "  ! не удалось скопировать /etc/wdtt — WDTT-пользователи вне бэкапа"
+  fi
+
   # дамп PostgreSQL
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^remnawave-db$'; then
     docker exec remnawave-db sh -c 'pg_dumpall -U "${POSTGRES_USER:-postgres}"' \
@@ -515,6 +547,11 @@ do_backup(){
     || say "! не удалось создать архив — файлы остались в $bdir"
 
   say "Готово. Все бэкапы: $B/backups/"
+  say ""
+  say "ВАЖНО: бэкап лежит на ТОМ ЖЕ сервере. Умрёт VPS — умрёт и бэкап."
+  say "Утащи архив к себе на ПК (запусти на СВОЁМ ПК, не на сервере):"
+  say "  scp root@${EXIT_IP:-<IP_MOONLIGHT>}:$arc ."
+  say "Храни его в зашифрованном месте — там пароли и приватные ключи."
 }
 
 do_preflight(){

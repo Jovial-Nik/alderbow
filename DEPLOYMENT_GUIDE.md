@@ -63,8 +63,9 @@
    curl -fsSL -o /root/mycloud-deploy.sh \
      https://raw.githubusercontent.com/jovial-nik/alderbow/<ветка>/mycloud-deploy.sh
    ```
-   Актуальная стабильная ветка на момент написания: `stable/xhttp-fixed`.
-   Рабочая ветка с текущей разработкой: `claude/hopeful-thompson-gr606f`.
+   **Каноническая ветка со всем актуальным** (WDTT-форк, `verify`, снятый
+   Tailscale): `claude/hopeful-thompson-gr606f` — тяни отсюда. `stable/xhttp-fixed`
+   — более старый снапшот (ещё со старым WDTT), для нового деплоя не использовать.
 
 ---
 
@@ -74,8 +75,9 @@
 
 ```bash
 ssh root@<IP_MOONLIGHT>
-curl -fsSL -o /root/mycloud-deploy.sh \
-  https://raw.githubusercontent.com/jovial-nik/alderbow/stable/xhttp-fixed/mycloud-deploy.sh
+# каноническая ветка со всем актуальным; ?nocache сбивает CDN-кеш raw
+curl -4 -fsSL -o /root/mycloud-deploy.sh \
+  "https://raw.githubusercontent.com/jovial-nik/alderbow/claude/hopeful-thompson-gr606f/mycloud-deploy.sh?nocache=$(date +%s)"
 bash -n /root/mycloud-deploy.sh && echo "синтаксис ОК"
 cd /root
 ```
@@ -98,7 +100,7 @@ sudo bash mycloud-deploy.sh wizard
 | Публичный IP выходного сервера | IP Moonlight |
 | Имя выходного узла | `Moonlight` (метка, для читаемости) |
 | E-mail для Let's Encrypt | твой email |
-| Скрывать панель через Tailscale | `yes` (рекомендуется — панель НЕ будет публично доступна) |
+| Скрывать панель через Tailscale | `no` — **больше не использовать** (Tailscale ломает DNS сервера, см. раздел 6.3); доступ к панели через SSH-туннель |
 | Блокировать RU-домены/IP на выходе | `no`, если не нужно |
 | Post-quantum Reality | `no` (экспериментально, не включай без причины) |
 | Staging-сертификат LE | `no` (staging — только для тестов, браузер будет ругаться) |
@@ -123,7 +125,7 @@ sudo bash mycloud-deploy.sh run exit
 
 **Что произойдёт по фазам** (для понимания, если что-то упадёт на середине):
 
-1. `wdtt-build.sh` — мобильный TURN-канал (аварийный VPN). Ставит форк `ildarmaga/wdtt` (исходный `amurcanov/proxy-turn-vk-android` автором свёрнут): тот же протокол и клиенты, плюс веб-панель с пользователями (tcp 2860, **не публична** — только SSH-туннель/Tailscale) и поддержка CSQTT-клиентов (udp 46000). Установщик форка запускается «трубой» (`bash <(curl …)` — иначе не находит свои templates), `--direct` (без его Xray), и **собирает сервер из исходников Go** — нужно ≥1.5 ГБ RAM (или swap) и ≥2 ГБ диска. При миграции старый `wdtt-server` НЕ останавливается до успеха; если сборка/старт форка падает — автоматический откат на прежний сервер (пользователи не теряют связь). **Не собирать на боевом сервере с живыми пользователями** без обкатки на тесте. Переустановить/обновить только эту фазу: `sudo bash mycloud-deploy.sh run wdtt-build.sh`
+1. `wdtt-build.sh` — мобильный TURN-канал (аварийный VPN). Ставит форк `ildarmaga/wdtt` (исходный `amurcanov/proxy-turn-vk-android` автором свёрнут): тот же протокол и клиенты, плюс веб-панель с пользователями (tcp 2860, **не публична** — только SSH-туннель) и поддержка CSQTT-клиентов (udp 46000). Установщик форка запускается «трубой» (`bash <(curl …)` — иначе не находит свои templates), `--direct` (без его Xray), и **собирает сервер из исходников Go** — нужно ≥1.5 ГБ RAM (или swap) и ≥2 ГБ диска. При миграции старый `wdtt-server` НЕ останавливается до успеха; если сборка/старт форка падает — автоматический откат на прежний сервер (пользователи не теряют связь). **Не собирать на боевом сервере с живыми пользователями** без обкатки на тесте. Переустановить/обновить только эту фазу: `sudo bash mycloud-deploy.sh run wdtt-build.sh`
 2. `deploy-moonlight.sh` — поднимает Docker, панель Remnawave, страницу
    подписки, временный Caddy на 443 (для выпуска сертификата), генерирует
    Reality-ключи и Xray-профиль
@@ -144,8 +146,9 @@ sudo bash mycloud-deploy.sh run exit
     `/c/<uuid>/` для тестового клиента
 11. `health-check.sh` — итоговая проверка всех портов/сертификатов/контейнеров
 12. (если `AUTO_RELAY=yes`) — авто-запуск `run relay` (см. ниже)
-13. (если `USE_TAILSCALE=yes`) — `setup-tailscale.sh`, панель становится
-    доступна по `https://<node>.<tailnet>.ts.net:8444`
+13. (Tailscale — устарело) фаза `setup-tailscale.sh` при `USE_TAILSCALE=yes`
+    НЕ использовать: MagicDNS перехватывает `/etc/resolv.conf` и ломает DNS
+    сервера (см. раздел 6.3). Доступ к панели — только SSH-туннель.
 
 ### Шаг 4 — если релей НЕ развернулся автоматически
 
@@ -208,11 +211,13 @@ sudo bash mycloud-deploy.sh stages          # список фаз для тек�
 sudo bash mycloud-deploy.sh run exit        # полный деплой роли exit (Moonlight)
 sudo bash mycloud-deploy.sh run relay       # полный деплой роли relay (запускается на Moonlight, деплоит Sunshine по SSH)
 sudo bash mycloud-deploy.sh --from <фаза> run exit   # запуск с конкретной фазы (напр. --from provision.sh)
+sudo bash mycloud-deploy.sh run wdtt-build.sh        # только фаза WDTT (переустановить/обновить форк)
 sudo bash mycloud-deploy.sh info            # сводка: ссылки, доступы
+sudo bash mycloud-deploy.sh verify          # сверить панель ↔ живой Xray (drift-проверка)
 sudo bash mycloud-deploy.sh probe           # проверка серверов СНАРУЖИ (как видит их клиент)
 sudo bash mycloud-deploy.sh update          # обновить Docker-образы панели/ноды/Caddy
-sudo bash mycloud-deploy.sh backup          # бэкап конфигов + дамп БД панели
-sudo bash mycloud-deploy.sh restore [архив] # восстановить из бэкапа
+sudo bash mycloud-deploy.sh backup          # бэкап: конфиги, credentials, reality-ключи, БД, /etc/wdtt
+sudo bash mycloud-deploy.sh restore [архив] # восстановить из бэкапа (вкл. reality.env, /etc/wdtt)
 sudo bash mycloud-deploy.sh rotate          # сменить пароли (панель, WDTT)
 sudo bash mycloud-deploy.sh reset           # ПОЛНОЕ УДАЛЕНИЕ стека (необратимо!)
 sudo bash mycloud-deploy.sh render <имя>    # вывести отрендеренный шаблон (для отладки)
@@ -242,7 +247,7 @@ sudo bash mycloud-deploy.sh --from provision-relay.sh run relay
 | `/root/mycloud-deploy.sh` | сам скрипт |
 | `/opt/<slug>/.deploy/deploy.conf` | сохранённая конфигурация wizard'а (slug — это бренд, приведённый к нижнему регистру, напр. `alderbow`) |
 | `/opt/<slug>/credentials.txt` | логин/пароль admin панели Remnawave |
-| `/etc/wdtt/panel.db` | БД WDTT-панели (пользователи, main-пароль); панель `http://127.0.0.1:2860/wdtt/` только через SSH-туннель/Tailscale |
+| `/etc/wdtt/panel.db` | БД WDTT-панели (пользователи, main-пароль); панель `http://127.0.0.1:2860/wdtt/` только через SSH-туннель |
 | `/opt/<slug>/wdtt/` | логи установщика WDTT, снапшоты `/etc/wdtt` и старый `wdtt-server` при миграции |
 | `/opt/<slug>/summary.txt` | последняя сводка `info` |
 | `/opt/<slug>/node/reality.env` | Reality-ключи Moonlight (private/public/shortId) |
@@ -436,5 +441,112 @@ v2RayTun, NekoBox и т.д.) и прогони тест задержки по в
   не нужно ни для настройки, ни для диагностики (весь этот гайд построен
   на том, что все команды выполняются САМИМ владельцем сервера в своём
   терминале).
-- Панель НЕ должна быть публично доступна — держи `USE_TAILSCALE=yes`
-  или используй только SSH-туннель.
+- Панель НЕ должна быть публично доступна — только SSH-туннель (Tailscale не
+  использовать: ломает DNS сервера).
+- Держи свежий бэкап ВНЕ сервера (см. раздел 9) — иначе смерть VPS = потеря
+  всех пользователей и ключей.
+
+---
+
+## 9. Бэкап и восстановление после смерти сервера
+
+### 9.1 Что бэкапить и куда
+
+Команда `backup` собирает `deploy.conf`, `.env` компонентов, `credentials.txt`,
+**Reality-ключи** (`node/reality.env`), `relay-bootstrap.env`, **дамп БД
+Remnawave** (пользователи, хосты, squad), данные Caddy (сертификаты) и
+**`/etc/wdtt` целиком** (пользователи WDTT + main-пароль + WG-ключи).
+
+```bash
+sudo bash mycloud-deploy.sh backup
+```
+
+**Критично**: архив лежит в `/opt/<slug>/backups/` НА ТОМ ЖЕ сервере. Умрёт VPS —
+умрёт и бэкап. Обязательно утащи архив к себе (запусти на СВОЁМ ПК):
+
+```bash
+scp root@<IP_MOONLIGHT>:/opt/<slug>/backups/<slug>-<TS>.tar.gz .
+```
+
+Храни в зашифрованном месте — там пароли и приватные ключи. Автоматизировать
+можно cron'ом на своём ПК (`scp` раз в сутки) — на самом сервере cron бесполезен,
+если сервер и есть точка отказа.
+
+### 9.2 Восстановление на новый сервер (Moonlight умер)
+
+Что реально нужно, чтобы поднять заново БЕЗ потери пользователей:
+`credentials.txt`, `deploy.conf`, `node/reality.env`, дамп БД (`pg.sql`),
+`/etc/wdtt/panel.db`. Всё это в архиве из 9.1.
+
+1. Новый VPS. **Переведи A-запись домена на новый IP** (пользователи ходят по
+   домену — сам домен не меняется, меняется только IP за ним). Дождись
+   резолва, иначе Let's Encrypt не выпустит сертификат.
+2. Разверни чистый стек с ТЕМ ЖЕ доменом и брендом:
+   ```bash
+   curl -4 -fsSL -o /root/mycloud-deploy.sh \
+     "https://raw.githubusercontent.com/jovial-nik/alderbow/claude/hopeful-thompson-gr606f/mycloud-deploy.sh?nocache=$(date +%s)"
+   # положи рядом восстановленный deploy.conf ИЛИ пройди wizard с теми же ответами
+   sudo bash mycloud-deploy.sh run exit
+   ```
+3. Восстанови данные (пользователи/хосты/подписки) поверх:
+   ```bash
+   sudo bash mycloud-deploy.sh restore /path/к/<slug>-<TS>.tar.gz
+   ```
+   `restore` вернёт `credentials.txt`, `reality.env`, дамп БД в Remnawave и
+   `/etc/wdtt`. После — `run exit` ещё раз (идемпотентно), чтобы конфиги
+   разъехались по контейнерам.
+4. Проверь: `verify`, `info`, `probe`, и клиентом по подписке.
+
+**Что теряется, если бэкапа нет**: все пользователи и их подписки (БД), Reality-
+ключи (клиенты со старыми конфигами отвалятся — нужен ре-импорт подписки),
+пользователи WDTT/CSQTT. Домен и код скрипта — восстановимы всегда, данные — нет.
+
+### 9.3 Sunshine умер
+
+Проще — на Sunshine нет уникальных данных, только нода-релей. Подними новый VPS,
+на Moonlight выполни `run relay` заново — он заново прошьёт Sunshine по SSH.
+
+---
+
+## 10. Выживание после перезагрузки
+
+После ребута всё должно подняться само. Проверь, что сервисы в автозапуске:
+
+```bash
+systemctl is-enabled docker wdtt          # оба → enabled
+docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' remnanode remnawave   # → unless-stopped/always
+```
+
+**Swap, добавленный вручную, НЕ переживает перезагрузку** (его нет в `fstab`).
+Если оставляешь swap для будущих пересборок WDTT — сделай постоянным:
+
+```bash
+grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+```
+
+---
+
+## 11. Day-2: частые задачи (шпаргалка)
+
+```bash
+# добавить VPN-пользователя — через панель Remnawave (SSH-туннель → :8081),
+#   или по API (см. 6.2): POST /api/users, затем добавить в squad
+# сменить все пароли (admin панели + WDTT):
+sudo bash mycloud-deploy.sh rotate
+# рестарт основного VPN (нода Xray):
+docker restart remnanode
+# рестарт аварийного канала:
+systemctl restart wdtt
+# сверить панель ↔ живой Xray (после ручных правок):
+sudo bash mycloud-deploy.sh verify
+# обновить образы (панель/нода/Caddy):
+sudo bash mycloud-deploy.sh update
+```
+
+**WDTT: пользователь получает `device_mismatch` (CSQTT).** Пароль CSQTT
+привязывается к первому устройству. Если человек сменил телефон или пароль
+«прилип» не к тому устройству — расцепи привязку в панели WDTT
+(`ssh -L 2860:127.0.0.1:2860 …` → `http://localhost:2860/wdtt/` → у пользователя
+сбросить device / пересоздать), либо выдай ему нового юзера со свежим паролем.
+У каждого пользователя WDTT должен быть СВОЙ пароль — общий на двоих даст
+`device_mismatch` второму.
