@@ -123,7 +123,7 @@ sudo bash mycloud-deploy.sh run exit
 
 **Что произойдёт по фазам** (для понимания, если что-то упадёт на середине):
 
-1. `wdtt-build.sh` — мобильный TURN-канал (аварийный VPN)
+1. `wdtt-build.sh` — мобильный TURN-канал (аварийный VPN). Ставит форк `ildarmaga/wdtt` (исходный `amurcanov/proxy-turn-vk-android` автором свёрнут): тот же протокол и клиенты, плюс веб-панель с пользователями (tcp 2860, **не публична** — только SSH-туннель/Tailscale) и поддержка CSQTT-клиентов (udp 46000). Неинтерактивно, идемпотентно; при первом запуске поверх старого `wdtt-server` делает миграцию с сохранением пароля. Переустановить/обновить только его: `sudo bash mycloud-deploy.sh run wdtt-build.sh`
 2. `deploy-moonlight.sh` — поднимает Docker, панель Remnawave, страницу
    подписки, временный Caddy на 443 (для выпуска сертификата), генерирует
    Reality-ключи и Xray-профиль
@@ -242,6 +242,8 @@ sudo bash mycloud-deploy.sh --from provision-relay.sh run relay
 | `/root/mycloud-deploy.sh` | сам скрипт |
 | `/opt/<slug>/.deploy/deploy.conf` | сохранённая конфигурация wizard'а (slug — это бренд, приведённый к нижнему регистру, напр. `alderbow`) |
 | `/opt/<slug>/credentials.txt` | логин/пароль admin панели Remnawave |
+| `/etc/wdtt/panel.db` | БД WDTT-панели (пользователи, main-пароль); панель `http://127.0.0.1:2860/wdtt/` только через SSH-туннель/Tailscale |
+| `/opt/<slug>/wdtt/` | логи установщика WDTT, снапшоты `/etc/wdtt` и старый `wdtt-server` при миграции |
 | `/opt/<slug>/summary.txt` | последняя сводка `info` |
 | `/opt/<slug>/node/reality.env` | Reality-ключи Moonlight (private/public/shortId) |
 | `/opt/<slug>/node/.env` | SECRET_KEY ноды Moonlight |
