@@ -374,6 +374,21 @@ Remnawave 2.7.x API (основные эндпоинты):
    (много логических потоков через одно TCP-соединение) и становится
    так же стабилен, как WS. `flush_interval -1` при этом остаётся
    обязательным независимо от версии HTTP.
+9. **Истёк LE-сертификат — отвалилось всё на TLS (WS/XHTTP/подписка/
+   Hysteria2), REALITY жив.** Симптом в клиенте: `certificate has expired`.
+   Причина: после handoff Caddy сидит на 8443 (443 у Xray) и МОЖЕТ
+   перестать продлевать серт сам — наблюдали, как он пропустил ARI-окно
+   и дотянул до протухания. Лечится мгновенно рестартом Caddy (он тут же
+   продлевает по HTTP-01 на :80, который открыт). Порядок:
+   ```bash
+   docker restart <slug>-caddy && sleep 30
+   echo | openssl s_client -connect 127.0.0.1:8443 -servername <домен> 2>/dev/null | openssl x509 -noout -dates
+   # затем пересинк серта в ноду для Hysteria2:
+   sudo bash mycloud-deploy.sh --from sync-hy2-cert.sh run exit
+   ```
+   В коде теперь есть **watchdog** (`cert-watchdog.timer`, еженедельно): при
+   <21 дне до истечения сам рестартит Caddy и пересинкивает серт в ноду.
+   Проверить: `systemctl list-timers cert-watchdog.timer`.
 
 ### 6.4 Если что-то сломалось после ручных правок в панели
 
